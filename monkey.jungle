@@ -1,0 +1,21 @@
+project.manifest = manifest.xml
+
+# Each product keeps exactly one onLayout variant (matched to its screen
+# resolution) plus the multi-line "headerV" header. The single-line "header"
+# and the legacy "ed520" layout (from upstream EveryTile) are unused here.
+#
+#   edge1040                 282x470  -> ed1030
+#   edge540 / edge840        246x322  -> ed530
+#   edgeexplore2             240x400  -> ed1000
+#   edge1050                 480x800  -> ed1050  (new)
+#   edge550 / edge850        420x600  -> ed550   (new)
+#   edgemtb                  240x320  -> edmtb   (new)
+
+edge1040.excludeAnnotations     = ed520;ed530;ed1000;ed1050;ed550;edmtb;header
+edge540.excludeAnnotations      = ed520;ed1000;ed1030;ed1050;ed550;edmtb;header
+edge840.excludeAnnotations      = ed520;ed1000;ed1030;ed1050;ed550;edmtb;header
+edgeexplore2.excludeAnnotations = ed520;ed530;ed1030;ed1050;ed550;edmtb;header
+edge1050.excludeAnnotations     = ed520;ed530;ed1000;ed1030;ed550;edmtb;header
+edge550.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;edmtb;header
+edge850.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;edmtb;header
+edgemtb.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;ed550;header

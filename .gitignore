@@ -1,0 +1,24 @@
+# Connect IQ build artifacts
+/bin/
+*.prg
+*.prg.debug.xml
+*.iq
+*.mir
+*.mbc
+
+# Signing keys / secrets (never commit)
+*.der
+*.pem
+*.p12
+*key*.pem
+developer_key*
+*sbeam_key*
+
+# Local tooling / editor (not for the public repo)
+.claude/
+.vscode/
+CLAUDE.md
+
+# OS cruft
+Thumbs.db
+.DS_Store
