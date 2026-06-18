@@ -45,4 +45,4 @@ maps to one hard‑coded screen layout via per‑product `excludeAnnotations` in
 
 - **Home Latitude / Longitude** — centre of the persistent tile map.
 - **Map string** — an optional encoded string of tiles you've already visited,
-  so your history shows up immediately. (A generator for this string is planned.)
+  so your history shows up immediately.

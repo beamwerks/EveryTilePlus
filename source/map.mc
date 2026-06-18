@@ -126,6 +126,17 @@ class map{
    }
 
 
+   // base64url character byte -> 6-bit value (A-Z=0..25, a-z=26..51,
+   // 0-9=52..61, '-'=62, '_'=63)
+   function b64v(c)
+   {
+      if ((c >= 65) && (c <= 90))  { return c - 65; }
+      if ((c >= 97) && (c <= 122)) { return c - 71; }
+      if ((c >= 48) && (c <= 57))  { return c + 4; }
+      if (c == 45) { return 62; }
+      return 63;   // '_' (95)
+   }
+
    function initialize()
    {
        var i=0;
@@ -134,22 +145,23 @@ class map{
        hlat = Properties.getValue("homeLatitude");
        hlon = Properties.getValue("homeLongitude");
        bigMap = Storage.getValue("bigMap");
+       str = Properties.getValue("bmapstr");
 
-       if((bigMap==null) || (hlat!=Storage.getValue("hlat")) || (hlon!=Storage.getValue("hlon")) )
+       // Re-apply the seed string ONLY when it actually changes (or home moves),
+       // so re-syncing the same value from Garmin Express is a no-op and never
+       // wipes ride progress. The last-applied string is remembered in storage,
+       // and the bmapstr property is left untouched (customers never clear it).
+       var applied = Storage.getValue("bmapApplied");
+       var homeChanged = (hlat != Storage.getValue("hlat")) || (hlon != Storage.getValue("hlon"));
+       var hasSeed = (str != null) && (str.length() == 2604);
+       var seedChanged = hasSeed && ((applied == null) || !str.equals(applied));
+
+       if (hasSeed && (seedChanged || homeChanged))
        {
+          // a new or changed seed string -> decode it, replacing the map
           bigMap = new[496];
-          str = Properties.getValue("bmapstr");
-          if (str.length() != 2604)
+          for (i=0; i<124; i++)
           {
-             for (i=0; i<496; i++)
-             {
-                bigMap[i]=0;
-             }
-          }else
-          {
-             // decode string into bigMap
-             for (i=0; i<124; i++)
-             {
                 vec = str.substring(i*21,i*21+21).toUtf8Array();
                 /*
                 bigMap[i*4]   = ((vec[0]-48) & 0x3f)
@@ -177,43 +189,50 @@ class map{
                                +((vec[19]-48) & 0x3f)<<24
                                +((vec[20]-48) & 0x08)<<27;
                */
-               // less secure, but slimmer version:
-               for( hlati=0; hlati<21; hlati++)
-               {
-                 vec[hlati] -= 48;
-               }
-               hlati = i*4;
-               bigMap[hlati]   =  vec[0]
-                                 +vec[1]<<6
-                                 +vec[2]<<12
-                                 +vec[3]<<18
-                                 +vec[4]<<24
-                                 +(vec[20] & 0x01)<<30;
-               bigMap[hlati+1] =  vec[5]
-                                 +vec[6]<<6
-                                 +vec[7]<<12
-                                 +vec[8]<<18
-                                 +vec[9]<<24
-                                 +(vec[20] & 0x02)<<29;
-               bigMap[hlati+2] =  vec[10]
-                                 +vec[11]<<6
-                                 +vec[12]<<12
-                                 +vec[13]<<18
-                                 +vec[14]<<24
-                                 +(vec[20] & 0x04)<<28;
-               bigMap[hlati+3] =  vec[15]
-                                 +vec[16]<<6
-                                 +vec[17]<<12
-                                 +vec[18]<<18
-                                 +vec[19]<<24
-                                 +(vec[20] & 0x08)<<27;
-             }
+               // decode 21 base64url chars -> 4 x 31-bit words (columns 0..123)
+               var b = i*4;
+               var ov = b64v(vec[20]);
+               bigMap[b]   = b64v(vec[0])
+                           | (b64v(vec[1])<<6)
+                           | (b64v(vec[2])<<12)
+                           | (b64v(vec[3])<<18)
+                           | (b64v(vec[4])<<24)
+                           | ((ov & 0x01)<<30);
+               bigMap[b+1] = b64v(vec[5])
+                           | (b64v(vec[6])<<6)
+                           | (b64v(vec[7])<<12)
+                           | (b64v(vec[8])<<18)
+                           | (b64v(vec[9])<<24)
+                           | ((ov & 0x02)<<29);
+               bigMap[b+2] = b64v(vec[10])
+                           | (b64v(vec[11])<<6)
+                           | (b64v(vec[12])<<12)
+                           | (b64v(vec[13])<<18)
+                           | (b64v(vec[14])<<24)
+                           | ((ov & 0x04)<<28);
+               bigMap[b+3] = b64v(vec[15])
+                           | (b64v(vec[16])<<6)
+                           | (b64v(vec[17])<<12)
+                           | (b64v(vec[18])<<18)
+                           | (b64v(vec[19])<<24)
+                           | ((ov & 0x08)<<27);
           }
-
-          Storage.setValue("hlat",hlat);
-          Storage.setValue("hlon",hlon);
-          Properties.setValue("bmapstr",""); // not used anymore, might as well delete it
-          Storage.setValue("bigMap",bigMap);
+          Storage.setValue("bmapApplied", str);
+          Storage.setValue("bigMap", bigMap);
+          Storage.setValue("hlat", hlat);
+          Storage.setValue("hlon", hlon);
+       }
+       else if ((bigMap == null) || homeChanged)
+       {
+          // first run (or home moved) with no seed -> start blank
+          bigMap = new[496];
+          for (i=0; i<496; i++)
+          {
+             bigMap[i] = 0;
+          }
+          Storage.setValue("bigMap", bigMap);
+          Storage.setValue("hlat", hlat);
+          Storage.setValue("hlon", hlon);
        }
 
        hlati = lat2lati(hlat);
@@ -225,6 +244,84 @@ class map{
        newTiles=0;
        newTilesR=0;
        bigmap2lmap(hloni,hlati);
+   }
+
+   // 1 if the global tile (gx,gy) has ever been visited, else 0 (for display).
+   function tileVisited(gx, gy)
+   {
+      var lx = gx - hloni + 61;
+      var ly = gy - hlati + 61;
+      if ((lx < 0) || (lx > 123) || (ly < 0) || (ly > 123))
+      {
+         return 0;
+      }
+      return ((bigMap[ly*4 + lx/31] & (1 << (lx % 31))) != 0) ? 1 : 0;
+   }
+
+   // Is the global tile (gx,gy) never-visited? Tiles outside the saved 124x124
+   // area are unknown, so we treat them as new too.
+   function isUnexplored(gx, gy)
+   {
+      var lx = gx - hloni + 61;
+      var ly = gy - hlati + 61;
+      if ((lx < 0) || (lx > 123) || (ly < 0) || (ly > 123))
+      {
+         return true;
+      }
+      return ((bigMap[ly*4 + lx/31] & (1 << (lx % 31))) == 0);
+   }
+
+   // Nearest never-visited ("new") tile to the current position (fx,fy in
+   // fractional tile coords), as global tile coords [x,y]; null if none found.
+   // Selection uses the distance from (fx,fy) to the *nearest point* of each
+   // tile, so the tile you are about to ride into wins over equidistant
+   // neighbours. Expanding-ring search bounds the work; two extra rings are
+   // scanned past the first hit so a closer tile can't be missed.
+   function nearestNewTile(fx, fy)
+   {
+      var cx = loni;
+      var cy = lati;
+      var best = null;
+      var bestD = 0.0;
+      var stopR = -1;
+      var r;
+      var x;
+      var y;
+      for (r = 1; r <= 124; r++)
+      {
+         for (x = cx - r; x <= cx + r; x++)
+         {
+            for (y = cy - r; y <= cy + r; y++)
+            {
+               // ring only - skip the interior already scanned at smaller r
+               if ((x > cx - r) && (x < cx + r) && (y > cy - r) && (y < cy + r))
+               {
+                  continue;
+               }
+               if (isUnexplored(x, y))
+               {
+                  var ddx = 0.0;
+                  if (fx < x)     { ddx = x - fx; }
+                  else if (fx > x + 1) { ddx = fx - (x + 1); }
+                  var ddy = 0.0;
+                  if (fy < y)     { ddy = y - fy; }
+                  else if (fy > y + 1) { ddy = fy - (y + 1); }
+                  var dd = ddx * ddx + ddy * ddy;
+                  if ((best == null) || (dd < bestD))
+                  {
+                     best = [x, y];
+                     bestD = dd;
+                  }
+               }
+            }
+         }
+         if (best != null)
+         {
+            if (stopR < 0) { stopR = r + 2; }
+            if (r >= stopR) { break; }
+         }
+      }
+      return best;
    }
 
    function save()
