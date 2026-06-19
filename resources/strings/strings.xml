@@ -12,5 +12,8 @@
     <string id="bmapstrPrompt">paste the map string here</string>
     <string id="bmapstrError">bad map string</string>
 
+    <string id="newTileToneTitle">New tile sound</string>
+    <string id="newTileTonePrompt">Play a chime when you enter a tile for the very first time</string>
+
     <string id="wholeDisp">needs whole disp.</string>
 </strings>

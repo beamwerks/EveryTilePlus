@@ -3,4 +3,5 @@
     <property id="homeLongitude" type="float">7.150607</property>
     <property id="homeLatitude" type="float">51.267202</property>
     <property id="bmapstr" type="string"></property>
+    <property id="newTileTone" type="boolean">true</property>
 </properties>

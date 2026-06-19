@@ -17,6 +17,7 @@ using Toybox.Graphics as Gfx;
 using Toybox.Math as Math;
 using Toybox.Activity as Act;
 using Toybox.Application.Storage;
+using Toybox.Application.Properties;
 using Toybox.System as Sys;
 using Toybox.Attention;
 
@@ -50,6 +51,7 @@ class EveryTilePlusView extends Ui.DataField {
     hidden var navAng = 0.0; // heading-relative bearing to it (radians)
     hidden var navDist = ""; // formatted distance to it
     hidden var initialized = false;
+    hidden var suppressTone = false; // skip the new-tile chime for the starting tile
 
     hidden var pt;          // fine path
     hidden var cpt;         // coarse path
@@ -601,6 +603,7 @@ class EveryTilePlusView extends Ui.DataField {
                 mp.newTilesR= 0;
                 initialized=true;
                 mp.loni = 16385; // to force a map update
+                suppressTone = true; // don't chime for the starting tile
                 dispHdg = heading; // snap orientation on first fix
                 tgtHdg = heading;
                 hdgPend = heading;
@@ -614,7 +617,10 @@ class EveryTilePlusView extends Ui.DataField {
              if( mp.setMap(dgr[1],dgr[0]) )
              {
                 cpt.add(dgr);
+                var wasNew = mp.newTiles;
                 mp.setTiles(cpt.p,cpt.l);
+                if ((mp.newTiles > wasNew) && !suppressTone) { playNewTileTone(); }
+                suppressTone = false;
                 cpt.save();
                 //Storage.setValue eats mem like crazy, free some up before saving...
                 cpt.p = null;
@@ -625,6 +631,21 @@ class EveryTilePlusView extends Ui.DataField {
                 pt.set(0,dgr);
              }
           }
+       }
+    }
+
+
+    // Pleasant chime when a tile is entered for the very first time ever.
+    // Opt-out via the "New tile sound" setting; also honours the device's
+    // master tone switch, and is guarded so devices without a buzzer no-op.
+    function playNewTileTone()
+    {
+       var on = Properties.getValue("newTileTone");
+       if (on == null) { on = true; }          // default on for old installs
+       if (!on) { return; }
+       if ((Attention has :playTone) && Sys.getDeviceSettings().tonesOn)
+       {
+          Attention.playTone(Attention.TONE_SUCCESS);
        }
     }
 
