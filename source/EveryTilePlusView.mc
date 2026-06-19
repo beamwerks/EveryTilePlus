@@ -47,6 +47,8 @@ class EveryTilePlusView extends Ui.DataField {
     hidden var heading = 0.0;
     hidden var dispHdg = 0.0; // smoothed map orientation (radians, track-up)
     hidden var tgtHdg = 0.0;  // orientation target (last heading while moving)
+    hidden var hdgPend = 0.0; // pending heading awaiting confirmation (spike guard)
+    hidden var hdgBad = 0;    // 1 once a suspicious jump is seen, else 0
     hidden var rfx = 0.0;     // rider tile-x pivot for rotation
     hidden var rfy = 0.0;     // rider tile-y pivot
     hidden var pcx = 0;       // screen centre (rider) x
@@ -393,17 +395,48 @@ class EveryTilePlusView extends Ui.DataField {
 
           // Track-up orientation. GPS heading is unreliable when stopped, so we
           // only adopt a new target while actually moving; otherwise the map
-          // holds its last orientation. dispHdg eases toward the target so turns
-          // glide instead of snapping.
+          // holds its last orientation. A large jump from the current target is
+          // treated as a possible GPS course spike and ignored unless the next
+          // sample confirms it (a lone spike snaps back and never takes hold).
+          // dispHdg then eases toward the target so real turns glide.
           var spd = info.currentSpeed;
           if (haveHdg && (spd != null) && (spd >= 1.0))
           {
-             tgtHdg = heading;
+             var jump = heading - tgtHdg;
+             while (jump >  3.141592653589793) { jump -= 6.283185307179586; }
+             while (jump < -3.141592653589793) { jump += 6.283185307179586; }
+             if (jump.abs() > 1.0)               // ~57deg jump in one second: suspect
+             {
+                var conf = heading - hdgPend;
+                while (conf >  3.141592653589793) { conf -= 6.283185307179586; }
+                while (conf < -3.141592653589793) { conf += 6.283185307179586; }
+                if ((hdgBad > 0) && (conf.abs() < 0.5))
+                {
+                   tgtHdg = heading;             // a 2nd sample agrees -> real turn
+                   hdgBad = 0;
+                }
+                else
+                {
+                   hdgPend = heading;            // hold orientation, await confirmation
+                   hdgBad = 1;
+                }
+             }
+             else
+             {
+                tgtHdg = heading;                // normal small change -> trust it
+                hdgBad = 0;
+             }
           }
           var dh = tgtHdg - dispHdg;
           while (dh >  3.141592653589793) { dh -= 6.283185307179586; }
           while (dh < -3.141592653589793) { dh += 6.283185307179586; }
-          dispHdg += dh * 0.25;
+          // Damp the constant small weave of riding straight with a soft
+          // deadband: gain ramps from very low for tiny jitter up to the normal
+          // rate by ~10deg, so the grid ignores wobble but still follows turns.
+          var ad = dh.abs();
+          var gain = 0.25;
+          if (ad < 0.18) { gain = 0.05 + 1.111 * ad; } // 0.05 @0deg -> 0.25 @~10deg
+          dispHdg += dh * gain;
 
           if (info.currentLocation != null)
           {
@@ -421,6 +454,8 @@ class EveryTilePlusView extends Ui.DataField {
                 mp.loni = 16385; // to force a map update
                 dispHdg = heading; // snap orientation on first fix
                 tgtHdg = heading;
+                hdgPend = heading;
+                hdgBad = 0;
              }
 
              if( pxdist(dgr,pt.getDeg(null)) )
