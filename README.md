@@ -6,9 +6,9 @@ A Garmin Connect IQ **data field** for Edge cycling computers that tracks
 While recording an activity, the field shows a 5×5 grid of tiles centred on your
 current position:
 
-- **red** — tile never visited
-- **green** — tile visited on a previous ride
-- **bright green** — tile entered during the current ride
+- **orange** — tile never visited
+- **blue** — tile visited on a previous ride
+- **bright blue** — tile entered during the current ride
 
 It also overlays your track and a heading arrow, and shows running counts of new
 tiles (all‑time) and tiles crossed this ride. You can pre‑load the tiles you've
