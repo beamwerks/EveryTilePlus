@@ -65,6 +65,9 @@ class EveryTilePlusView extends Ui.DataField {
     hidden var tgtHdg = 0.0;  // orientation target (last heading while moving)
     hidden var hdgPend = 0.0; // pending heading awaiting confirmation (spike guard)
     hidden var hdgBad = 0;    // 1 once a suspicious jump is seen, else 0
+    hidden var hrefX = 0.0;   // heading reference position (mercator tile x)
+    hidden var hrefY = 0.0;   // heading reference position (mercator tile y)
+    hidden var hdgInit = false; // has the track orientation been seeded yet?
     hidden var rfx = 0.0;     // rider tile-x pivot for rotation
     hidden var rfy = 0.0;     // rider tile-y pivot
     hidden var pcx = 0;       // screen centre (rider) x
@@ -535,28 +538,78 @@ class EveryTilePlusView extends Ui.DataField {
     // guarantee that compute() will be called before onUpdate().
     function compute(info)
     {
-       if( info != null)
-       {
-          heading = info.currentHeading;
-          var haveHdg = (heading != null);
-          if(!haveHdg)
-          {
-             heading = 0.0;
-          }
+       if (info == null) { return; }
+       if (info.currentLocation == null) { return; }
 
-          // Track-up orientation. GPS heading is unreliable when stopped, so we
-          // only adopt a new target while actually moving; otherwise the map
-          // holds its last orientation. A large jump from the current target is
-          // treated as a possible GPS course spike and ignored unless the next
-          // sample confirms it (a lone spike snaps back and never takes hold).
-          // dispHdg then eases toward the target so real turns glide.
-          var spd = info.currentSpeed;
-          if (haveHdg && (spd != null) && (spd >= 1.0))
+       var spd = info.currentSpeed;
+       var ddgr = info.currentLocation.toDegrees();
+       var dgr = [ddgr[0].toFloat(), ddgr[1].toFloat()];
+       var i = 0;
+
+       // current position in conformal Mercator tile units (the map's space):
+       // +x = east, +y = south
+       var cfx = (dgr[1] + 180.0) * 45.5111111111111;
+       var crad = dgr[0] * 0.0174532925199433;
+       var cfy = 8192.0 - Math.ln(Math.tan(crad) + 1.0 / Math.cos(crad)) * 2607.59458761762;
+
+       if(!initialized)
+       {
+          pt.set(0,dgr);
+          //cpt.set(0,dgr);
+          cpt.l=-1;
+          mp.newTiles = 0;
+          mp.newTilesR= 0;
+          initialized=true;
+          mp.loni = 16385;     // to force a map update
+          suppressTone = true; // don't chime for the starting tile
+          // orientation holds north-up until we've moved enough to measure a
+          // travel bearing (no magnetic compass is used)
+          hrefX = cfx;
+          hrefY = cfy;
+          hdgInit = false;
+          hdgBad = 0;
+       }
+
+       // ---- track-up orientation from GPS movement (no magnetic compass) ----
+       // Heading = bearing of travel, taken from the displacement since a recent
+       // reference fix. Mercator is conformal, so the on-map angle equals the
+       // true compass bearing. We only refresh it once we've moved far enough
+       // for the angle to be trustworthy (and only while actually moving);
+       // otherwise the map holds its last orientation. A lone GPS spike is held
+       // pending and adopted only if the next segment confirms it; dispHdg then
+       // eases toward the target so real turns glide.
+       var haveHdg = false;
+       if ((spd != null) && (spd >= 1.0))
+       {
+          var ex = cfx - hrefX;          // east component (tiles)
+          var ny = hrefY - cfy;          // north component (tiles)
+          if ((ex*ex + ny*ny) > 0.0001)  // moved ~>20 m: bearing is reliable
+          {
+             heading = Math.atan2(ex, ny); // radians, clockwise from north
+             haveHdg = true;
+             hrefX = cfx;                  // reset the baseline for the next leg
+             hrefY = cfy;
+          }
+       }
+       else
+       {
+          hrefX = cfx;   // (re)anchor while stopped so the next move reads fresh
+          hrefY = cfy;
+       }
+
+       if (haveHdg)
+       {
+          if (!hdgInit)
+          {
+             dispHdg = heading;  tgtHdg = heading;  // snap on the first bearing
+             hdgPend = heading;  hdgBad = 0;  hdgInit = true;
+          }
+          else
           {
              var jump = heading - tgtHdg;
              while (jump >  3.141592653589793) { jump -= 6.283185307179586; }
              while (jump < -3.141592653589793) { jump += 6.283185307179586; }
-             if (jump.abs() > 1.0)               // ~57deg jump in one second: suspect
+             if (jump.abs() > 1.0)               // ~57deg in one leg: suspect
              {
                 var conf = heading - hdgPend;
                 while (conf >  3.141592653589793) { conf -= 6.283185307179586; }
@@ -574,63 +627,42 @@ class EveryTilePlusView extends Ui.DataField {
              }
              else
              {
-                tgtHdg = heading;                // normal small change -> trust it
+                tgtHdg = heading;                // normal change -> trust it
                 hdgBad = 0;
              }
           }
-          var dh = tgtHdg - dispHdg;
-          while (dh >  3.141592653589793) { dh -= 6.283185307179586; }
-          while (dh < -3.141592653589793) { dh += 6.283185307179586; }
-          // Damp the constant small weave of riding straight with a soft
-          // deadband: gain ramps from very low for tiny jitter up to the normal
-          // rate by ~10deg, so the grid ignores wobble but still follows turns.
-          var ad = dh.abs();
-          var gain = 0.25;
-          if (ad < 0.18) { gain = 0.05 + 1.111 * ad; } // 0.05 @0deg -> 0.25 @~10deg
-          dispHdg += dh * gain;
+       }
 
-          if (info.currentLocation != null)
-          {
-             var ddgr = info.currentLocation.toDegrees();
-             var dgr = [ddgr[0].toFloat(), ddgr[1].toFloat()];
-             var i= 0;
-             if(!initialized)
-             {
-                pt.set(0,dgr);
-                //cpt.set(0,dgr);
-                cpt.l=-1;
-                mp.newTiles = 0;
-                mp.newTilesR= 0;
-                initialized=true;
-                mp.loni = 16385; // to force a map update
-                suppressTone = true; // don't chime for the starting tile
-                dispHdg = heading; // snap orientation on first fix
-                tgtHdg = heading;
-                hdgPend = heading;
-                hdgBad = 0;
-             }
+       // Ease dispHdg toward tgtHdg with a soft deadband: gain ramps from very
+       // low for tiny jitter up to the normal rate by ~10deg, so the grid
+       // ignores the constant weave of riding straight but still follows turns.
+       var dh = tgtHdg - dispHdg;
+       while (dh >  3.141592653589793) { dh -= 6.283185307179586; }
+       while (dh < -3.141592653589793) { dh += 6.283185307179586; }
+       var ad = dh.abs();
+       var gain = 0.25;
+       if (ad < 0.18) { gain = 0.05 + 1.111 * ad; } // 0.05 @0deg -> 0.25 @~10deg
+       dispHdg += dh * gain;
 
-             if( pxdist(dgr,pt.getDeg(null)) )
-             {
-                pt.add(dgr);
-             }
-             if( mp.setMap(dgr[1],dgr[0]) )
-             {
-                cpt.add(dgr);
-                var wasNew = mp.newTiles;
-                mp.setTiles(cpt.p,cpt.l);
-                if ((mp.newTiles > wasNew) && !suppressTone) { playNewTileTone(); }
-                suppressTone = false;
-                cpt.save();
-                //Storage.setValue eats mem like crazy, free some up before saving...
-                cpt.p = null;
-                pt.p = null;
-                mp.save();
-                cpt.load();
-                pt.p = new[100];
-                pt.set(0,dgr);
-             }
-          }
+       if( pxdist(dgr,pt.getDeg(null)) )
+       {
+          pt.add(dgr);
+       }
+       if( mp.setMap(dgr[1],dgr[0]) )
+       {
+          cpt.add(dgr);
+          var wasNew = mp.newTiles;
+          mp.setTiles(cpt.p,cpt.l);
+          if ((mp.newTiles > wasNew) && !suppressTone) { playNewTileTone(); }
+          suppressTone = false;
+          cpt.save();
+          //Storage.setValue eats mem like crazy, free some up before saving...
+          cpt.p = null;
+          pt.p = null;
+          mp.save();
+          cpt.load();
+          pt.p = new[100];
+          pt.set(0,dgr);
        }
     }
 
