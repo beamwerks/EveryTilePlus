@@ -1,5 +1,12 @@
 project.manifest = manifest.xml
 
+# Zoom-control icons are shared (not copied) from the Radar+ / WindField icon
+# set. Each device pulls its local "resources" plus the radarIcons drawables at
+# the matching resolution (40px medRez / 64px highRez).
+base.resourcePath = resources
+medRez  = ..\WindField\resources\icons\medRez\radarIcons
+highRez = ..\WindField\resources\icons\highRez\radarIcons
+
 # Each product keeps exactly one onLayout variant (matched to its screen
 # resolution) plus the multi-line "headerV" header. The single-line "header"
 # and the legacy "ed520" layout (from upstream EveryTile) are unused here.
@@ -10,6 +17,15 @@ project.manifest = manifest.xml
 #   edge1050                 480x800  -> ed1050  (new)
 #   edge550 / edge850        420x600  -> ed550   (new)
 #   edgemtb                  240x320  -> edmtb   (new)
+
+edge1040.resourcePath     = $(base.resourcePath);$(medRez)
+edge540.resourcePath      = $(base.resourcePath);$(medRez)
+edge840.resourcePath      = $(base.resourcePath);$(medRez)
+edgeexplore2.resourcePath = $(base.resourcePath);$(medRez)
+edgemtb.resourcePath      = $(base.resourcePath);$(medRez)
+edge1050.resourcePath     = $(base.resourcePath);$(highRez)
+edge550.resourcePath      = $(base.resourcePath);$(highRez)
+edge850.resourcePath      = $(base.resourcePath);$(highRez)
 
 edge1040.excludeAnnotations     = ed520;ed530;ed1000;ed1050;ed550;edmtb;header
 edge540.excludeAnnotations      = ed520;ed1000;ed1030;ed1050;ed550;edmtb;header

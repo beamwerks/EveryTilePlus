@@ -18,6 +18,18 @@ using Toybox.Math as Math;
 using Toybox.Activity as Act;
 using Toybox.Application.Storage;
 using Toybox.System as Sys;
+using Toybox.Attention;
+
+// Touch routing. The BehaviorDelegate (TouchDelegate.mc) forwards taps here,
+// and we hand them to the live view instance so it can hit-test the on-screen
+// zoom buttons. Set in EveryTilePlusView.initialize(); stays null (taps ignored)
+// if the view never came up.
+var gZoomView = null;
+
+function handleZoomTap(evt)
+{
+   if (gZoomView != null) { gZoomView.handleTouch(evt); }
+}
 
 class EveryTilePlusView extends Ui.DataField {
     // Colourblind-safe tile palette (orange vs blue is distinguishable by all
@@ -26,6 +38,8 @@ class EveryTilePlusView extends Ui.DataField {
     const COL_UNVIS = 0xFF7E00; // never visited (was red)
     const COL_VIS   = 0x0061C2; // visited on a previous ride (was dark green)
     const COL_RIDE  = 0x36C4FF; // touched this ride (was bright green)
+
+    const ZMAX = 21;  // widest manual zoom grid (odd; tiles still legible)
 
     hidden var tileW = 50;
     hidden var tileH = 50;
@@ -60,6 +74,17 @@ class EveryTilePlusView extends Ui.DataField {
     hidden var mx;
     hidden var my;
     hidden var singleDF = true;
+
+    // Manual zoom (touchscreen only). -1 = follow the automatic zoom; otherwise
+    // a fixed odd grid size (3..21). Persisted so it survives a mid-ride restart.
+    hidden var manualNv = -1;
+    hidden var touchable = false; // device has a touchscreen
+    hidden var zInBmp = null;  // zoom-in icon  (lazy-loaded BitmapResource)
+    hidden var zOutBmp = null; // zoom-out icon (lazy-loaded BitmapResource)
+    hidden var zSize = 0;      // icon pixel size (0 until loaded)
+    hidden var zRowY = 0;      // icons' top-left y (bottom of screen)
+    hidden var zOutX = 0;      // zoom-out icon left x ("-", on the left)
+    hidden var zInX = 0;       // zoom-in icon  left x ("+", on the right)
 
 
     // fractional tile coords -> screen pixel, rotated track-up about the rider.
@@ -100,7 +125,15 @@ class EveryTilePlusView extends Ui.DataField {
     // track-up: a target off to the side must stay inside the inscribed circle
     // (radius = half the SHORTER screen edge), so a diagonal target needs the
     // same room as one straight ahead.
+    // Grid size to draw with: the manual override if the rider set one,
+    // otherwise the automatic choice.
     function chooseZoom()
+    {
+       if (manualNv >= 3) { return manualNv; }
+       return autoZoom();
+    }
+
+    function autoZoom()
     {
        if (navNt == null) { return 5; }
        var ax = (navNt[0] - mp.loni).toFloat();
@@ -110,6 +143,115 @@ class EveryTilePlusView extends Ui.DataField {
        if (nv < 5)  { nv = 5; }
        if (nv > 13) { nv = 13; }
        return nv;
+    }
+
+    // "+" : fewer, larger tiles. Leaving AUTO snaps to the current automatic
+    // level so the first press is a sensible step in from what's shown.
+    // Tightening past the smallest grid (3) hands control back to AUTO, so the
+    // button is never dead and AUTO stays reachable. Returns true if changed.
+    function zoomIn()
+    {
+       var cur = (manualNv < 0) ? autoZoom() : manualNv;
+       if (cur <= 3) { manualNv = -1; return true; }  // tightest -> back to AUTO
+       manualNv = cur - 2;
+       return true;
+    }
+
+    // "-" : more, smaller tiles. Keeps widening up to a fixed cap (no reset to
+    // AUTO); from AUTO it steps out from the current automatic level. Returns
+    // true if the zoom actually changed.
+    function zoomOut()
+    {
+       var cur = (manualNv < 0) ? autoZoom() : manualNv;
+       var nx = cur + 2;
+       if (nx > ZMAX) { nx = ZMAX; }
+       if (manualNv == nx) { return false; }   // already at the widest
+       manualNv = nx;
+       return true;
+    }
+
+    // Hit-test a tap against the two zoom icons. Called via handleZoomTap()
+    // from the BehaviorDelegate. No-op unless we own the whole screen on a
+    // touchscreen and the icons have actually been laid out (zSize>0).
+    function handleTouch(evt)
+    {
+       if (!touchable || !singleDF || (zSize <= 0)) { return; }
+       var c = evt.getCoordinates();
+       var slop = 8;                          // generous finger target
+       if (c[1] < zRowY - slop) { return; }   // tap above the control row
+       var changed = false;
+       var pressed = false;
+       if ((c[0] >= zOutX - slop) && (c[0] <= zOutX + zSize + slop))
+       {
+          pressed = true; changed = zoomOut();
+       }
+       else if ((c[0] >= zInX - slop) && (c[0] <= zInX + zSize + slop))
+       {
+          pressed = true; changed = zoomIn();
+       }
+       if (!pressed) { return; }
+
+       if (changed)
+       {
+          Storage.setValue("manualNv", manualNv);
+          playTapTone(Attention.TONE_KEY);
+          Ui.requestUpdate();
+       }
+       else
+       {
+          playTapTone(Attention.TONE_ERROR);   // already at the limit
+       }
+    }
+
+    function playTapTone(tone)
+    {
+       if ((Attention has :playTone) && Sys.getDeviceSettings().tonesOn)
+       {
+          Attention.playTone(tone);
+       }
+    }
+
+    // Zoom controls along the bottom: "-" icon on the left, "+" on the right,
+    // and the current mode ("AUTO" or the grid size) centred between them.
+    // Uses the shared Radar+ magnifier icons (referenced from monkey.jungle);
+    // the light variants are used on a dark field background, dark on light.
+    function drawZoomControls(dc)
+    {
+       if (zInBmp == null)
+       {
+          if (getBackgroundColor() == Gfx.COLOR_BLACK)
+          {
+             zInBmp  = Ui.loadResource(Rez.Drawables.zoomInIconInverse);
+             zOutBmp = Ui.loadResource(Rez.Drawables.zoomOutIconInverse);
+          }
+          else
+          {
+             zInBmp  = Ui.loadResource(Rez.Drawables.zoomInIcon);
+             zOutBmp = Ui.loadResource(Rez.Drawables.zoomOutIcon);
+          }
+          zSize = zInBmp.getWidth();
+       }
+
+       var vSpacer = 8;
+       var hSpacer = (zSize * 3) / 4;          // gap from centre to each icon
+       zRowY = dy - zSize - vSpacer;
+       zOutX = mx - zSize - hSpacer;           // "-" on the left
+       zInX  = mx + hSpacer;                   // "+" on the right
+
+       dc.drawBitmap(zOutX, zRowY, zOutBmp);
+       dc.drawBitmap(zInX,  zRowY, zInBmp);
+
+       // big font for the (short) grid number; one size down for the wider
+       // "AUTO" word so it still fits the gap between the icons
+       var lbl = (manualNv < 0) ? "AUTO" : manualNv.format("%i");
+       var font = (manualNv < 0) ? Gfx.FONT_SMALL : Gfx.FONT_MEDIUM;
+       var fh = dc.getFontHeight(font);
+       // foreground only (transparent background) so there's no box behind it;
+       // colour matches the icon variant chosen for the field background
+       var tc = (getBackgroundColor() == Gfx.COLOR_BLACK) ? Gfx.COLOR_WHITE : Gfx.COLOR_BLACK;
+       dc.setColor(tc, Gfx.COLOR_TRANSPARENT);
+       dc.drawText(mx, zRowY + (zSize - fh) / 2, font, lbl,
+                   Gfx.TEXT_JUSTIFY_CENTER);
     }
 
     function pxdist(dgr1,dgr2)
@@ -135,6 +277,13 @@ class EveryTilePlusView extends Ui.DataField {
        cpt= new path(200,mp.hlon,mp.hlat);
 
        initialized=false;
+
+       // wire up touch zoom: register this view for tap routing, note whether
+       // the device has a touchscreen, and restore any saved manual zoom level
+       gZoomView = self;
+       touchable = Sys.getDeviceSettings().isTouchScreen;
+       var z = Storage.getValue("manualNv");
+       if (z != null) { manualNv = z; }
 
        var inf = Act.getActivityInfo();
        if( (inf!=null) && (inf.elapsedTime > 10000) )
@@ -773,6 +922,9 @@ class EveryTilePlusView extends Ui.DataField {
 
            // "you are here" marker at screen centre (a pulsing black/white dot)
            plotMarker(dc, pcx, pcy);
+
+           // on-screen zoom buttons (touchscreen devices only)
+           if (touchable) { drawZoomControls(dc); }
          }else
          {
             dc.setClip(0,0,dx,dy);

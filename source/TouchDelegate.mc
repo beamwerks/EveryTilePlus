@@ -13,25 +13,19 @@
 //! You should have received a copy of the GNU General Public License along
 //! with this program. If not, see <http://www.gnu.org/licenses/>.
 
-using Toybox.Application as App;
-class EveryTilePlusApp extends App.AppBase {
-    function initialize() {
-       AppBase.initialize();
-    }
+using Toybox.WatchUi as Ui;
 
-    //onStart() is called on application start up
-    //function onStart(state) {
-    //}
+// Forwards screen taps to the live data-field view so it can hit-test the
+// on-screen zoom buttons. Registered alongside the view in
+// EveryTilePlusApp.getInitialView(); only touch-capable devices ever deliver
+// taps here.
+class TouchDelegate extends Ui.BehaviorDelegate {
+   function initialize() {
+      BehaviorDelegate.initialize();
+   }
 
-    //onStop() is called when your application is exiting
-    //function onStop(state) {
-    //}
-
-    //! Return the initial view of your application here.
-    //! The BehaviorDelegate is what lets this data field receive on-screen
-    //! taps (for the zoom buttons) on touch-capable Edge units; it is ignored
-    //! on button-only devices.
-    function getInitialView() {
-        return [new EveryTilePlusView(), new TouchDelegate()];
-    }
+   function onTap(evt) {
+      handleZoomTap(evt);
+      return true;
+   }
 }
