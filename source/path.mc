@@ -2,7 +2,7 @@ using Toybox.Application.Storage;
 
 class path{
    var l;
-   var p;
+   var p as Toybox.Lang.Array<Toybox.Lang.Float> or Null;
    var mp;
    hidden var hlon;
    hidden var hlat;
@@ -45,7 +45,7 @@ class path{
 
    function load()
    {
-      p = Storage.getValue("cpath");
+      p = Storage.getValue("cpath") as Toybox.Lang.Array<Toybox.Lang.Float> or Null;
       l = Storage.getValue("clp");
       if((l!=null) && (p!=null))
       {
