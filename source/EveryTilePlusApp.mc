@@ -14,6 +14,7 @@
 //! with this program. If not, see <http://www.gnu.org/licenses/>.
 
 using Toybox.Application as App;
+using Toybox.WatchUi as Ui;
 class EveryTilePlusApp extends App.AppBase {
     function initialize() {
        AppBase.initialize();
@@ -26,6 +27,16 @@ class EveryTilePlusApp extends App.AppBase {
     //onStop() is called when your application is exiting
     //function onStop(state) {
     //}
+
+    //! Settings can be pushed from the phone mid-ride, so pass the change on
+    //! to the live view: the map orientation setting then takes effect without
+    //! waiting for a restart.
+    function onSettingsChanged() {
+        if (gZoomView != null) {
+            gZoomView.applyOrientSetting();
+            Ui.requestUpdate();
+        }
+    }
 
     //! Return the initial view of your application here.
     //! The BehaviorDelegate is what lets this data field receive on-screen

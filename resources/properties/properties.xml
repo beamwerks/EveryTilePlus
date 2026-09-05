@@ -4,4 +4,5 @@
     <property id="homeLatitude" type="float">51.267202</property>
     <property id="bmapstr" type="string"></property>
     <property id="newTileTone" type="boolean">true</property>
+    <property id="mapNorthUp" type="boolean">false</property>
 </properties>

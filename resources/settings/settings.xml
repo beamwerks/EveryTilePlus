@@ -14,4 +14,8 @@
     <setting propertyKey="@Properties.newTileTone" title="@Strings.newTileToneTitle" prompt="@Strings.newTileTonePrompt">
         <settingConfig type="boolean"/>
     </setting>
+
+    <setting propertyKey="@Properties.mapNorthUp" title="@Strings.mapNorthUpTitle" prompt="@Strings.mapNorthUpPrompt">
+        <settingConfig type="boolean"/>
+    </setting>
 </settings>

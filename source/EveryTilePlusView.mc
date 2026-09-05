@@ -231,6 +231,24 @@ class EveryTilePlusView extends Ui.DataField {
        }
     }
 
+    // Map orientation from the app settings. The button-only units (edge540,
+    // edge550, edgemtb) never get the on-screen toggle, so the setting is their
+    // only way to choose; on touchscreens the two drive the same state.
+    // Following the bmapstr pattern, the setting is applied only when it
+    // actually CHANGES -- the last applied value is remembered in storage -- so
+    // re-syncing the same value from Garmin Connect never overrides what the
+    // rider last picked with the on-screen button.
+    function applyOrientSetting()
+    {
+       var want = Properties.getValue("mapNorthUp");
+       if (want == null) { return; }
+       var applied = Storage.getValue("mapNorthUpApplied");
+       if ((applied != null) && (applied == want)) { return; }
+       northUp = want;
+       Storage.setValue("northUp", northUp);
+       Storage.setValue("mapNorthUpApplied", want);
+    }
+
     function playTapTone(tone)
     {
        if ((Attention has :playTone) && Sys.getDeviceSettings().tonesOn)
@@ -390,6 +408,7 @@ class EveryTilePlusView extends Ui.DataField {
        if (z != null) { manualNv = z; }
        var nu = Storage.getValue("northUp");
        if (nu != null) { northUp = nu; }
+       applyOrientSetting();
 
        var inf = Act.getActivityInfo();
        if( (inf!=null) && (inf.elapsedTime > 10000) )

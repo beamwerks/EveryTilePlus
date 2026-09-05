@@ -15,5 +15,8 @@
     <string id="newTileToneTitle">New tile sound</string>
     <string id="newTileTonePrompt">Play a chime when you enter a tile for the very first time</string>
 
+    <string id="mapNorthUpTitle">North up map</string>
+    <string id="mapNorthUpPrompt">Keep north at the top instead of turning the map so your direction of travel points up. On touchscreen devices the on-screen button changes this too, and changing it here overrides that.</string>
+
     <string id="wholeDisp">needs whole disp.</string>
 </strings>
