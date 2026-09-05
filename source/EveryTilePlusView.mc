@@ -672,6 +672,15 @@ class EveryTilePlusView extends Ui.DataField {
        var crad = dgr[0] * 0.0174532925199433;
        var cfy = 8192.0 - Math.ln(Math.tan(crad) + 1.0 / Math.cos(crad)) * 2607.59458761762;
 
+       // First fix of a fresh install with nothing imported and no home set:
+       // pin the stored map window here, so the very first tile records where
+       // the rider actually is instead of being dropped for being 1000km from
+       // the shipped default home.
+       if (mp.needsAnchor)
+       {
+          mp.anchorHome(dgr[0], dgr[1]);
+       }
+
        if(!initialized)
        {
           pt.set(0,dgr);

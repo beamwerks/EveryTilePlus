@@ -29,6 +29,13 @@ class map{
    var lati;     // current tile y
    var clon;     // current position x
    var clat;     // current position y
+   // The home defaults shipped in resources/properties/properties.xml. Used to
+   // tell "the rider deliberately set this" from "nobody ever opened settings".
+   const DEF_HLAT = 51.267202;
+   const DEF_HLON = 7.150607;
+
+   var needsAnchor = false; // waiting for a first GPS fix to place home
+
    var newTiles = 0;  // tiles visited for the first time
    var newTilesR = 0; // tiles visited for the first time this ride
    var maxSq = 0;     // side of the largest solid block of visited tiles
@@ -143,6 +150,56 @@ class map{
       return 63;   // '_' (95)
    }
 
+   // Has the rider actually chosen a home, or is this still the shipped
+   // default? Floats, so compare with a tolerance rather than for equality.
+   function homeWasSet()
+   {
+      return (((hlat - DEF_HLAT).abs() > 0.000001) ||
+              ((hlon - DEF_HLON).abs() > 0.000001));
+   }
+
+   // True while nothing has ever been recorded in the stored bitmap.
+   function mapIsEmpty()
+   {
+      if (bigMap == null) { return true; }
+      var i;
+      var n = bigMap.size();
+      for (i = 0; i < n; i++)
+      {
+         if (bigMap[i] != 0) { return false; }
+      }
+      return true;
+   }
+
+   // Pin the stored 124x124 window on the rider's first GPS fix. Called once,
+   // from compute(), when nobody set a home and there is nothing to import --
+   // otherwise such a rider keeps the shipped default (Germany) and, riding
+   // anywhere else, silently records nothing at all, for ever.
+   //
+   // The anchor is kept in storage rather than written back to the home
+   // property on purpose: the property is owned by the phone, and a later
+   // settings sync pushing the old default back would read as "the rider
+   // changed home" and wipe the map. Storage is device-side and cannot be
+   // overwritten that way, and initialize() ignores the property entirely
+   // while it still holds the default, so a re-sync is a no-op.
+   function anchorHome(lat, lon)
+   {
+      hlat = lat;
+      hlon = lon;
+      hlati = lat2lati(hlat);
+      hloni = lon2loni(hlon);
+      clat = hlat;
+      clon = hlon;
+      lati = hlati;
+      loni = 16385;        // force the next setMap() to record the current tile
+      needsAnchor = false;
+
+      Storage.setValue("autoHlat", hlat);
+      Storage.setValue("autoHlon", hlon);
+      Storage.setValue("hlat", hlat);
+      Storage.setValue("hlon", hlon);
+   }
+
    function initialize()
    {
        var i=0;
@@ -152,6 +209,28 @@ class map{
        hlon = Properties.getValue("homeLongitude");
        bigMap = Storage.getValue("bigMap");
        str = Properties.getValue("bmapstr");
+       if (hlat == null) { hlat = DEF_HLAT; }
+       if (hlon == null) { hlon = DEF_HLON; }
+
+       // No import, and the home setting never touched: hold home until the
+       // first GPS fix and pin it there (see anchorHome). Riders who already
+       // have tiles recorded against the default home are left alone -- they
+       // really do ride near it -- as are riders who set a home themselves.
+       var hasSeed = (str != null) && (str.length() == 2604);
+       if (!hasSeed && !homeWasSet())
+       {
+          var alat = Storage.getValue("autoHlat");
+          var alon = Storage.getValue("autoHlon");
+          if ((alat != null) && (alon != null))
+          {
+             hlat = alat;   // anchored on an earlier ride; keep that home
+             hlon = alon;
+          }
+          else if (mapIsEmpty())
+          {
+             needsAnchor = true;
+          }
+       }
 
        // Re-apply the seed string ONLY when it actually changes (or home moves),
        // so re-syncing the same value from Garmin Express is a no-op and never
@@ -159,7 +238,6 @@ class map{
        // and the bmapstr property is left untouched (customers never clear it).
        var applied = Storage.getValue("bmapApplied");
        var homeChanged = (hlat != Storage.getValue("hlat")) || (hlon != Storage.getValue("hlon"));
-       var hasSeed = (str != null) && (str.length() == 2604);
        var seedChanged = hasSeed && ((applied == null) || !str.equals(applied));
 
        if (hasSeed && (seedChanged || homeChanged))
