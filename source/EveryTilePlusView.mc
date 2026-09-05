@@ -91,6 +91,15 @@ class EveryTilePlusView extends Ui.DataField {
     hidden var zOutX = 0;      // zoom-out icon left x ("-", on the left)
     hidden var zInX = 0;       // zoom-in icon  left x ("+", on the right)
 
+    // Map orientation (touchscreen only, same as the zoom buttons). false =
+    // track-up (the direction of travel points up), true = north-up (the map is
+    // locked with north at the top). Persisted so it survives a mid-ride restart.
+    hidden var northUp = false;
+    hidden var ouX = 0;        // orientation button hit box (screen pixels)
+    hidden var ouY = 0;
+    hidden var ouW = 0;        // 0 until the button has been laid out
+    hidden var ouH = 0;
+
 
     // fractional tile coords -> screen pixel, rotated track-up about the rider.
     // (rfx,rfy) is the rider's tile position (the pivot), (pcx,pcy) the screen
@@ -180,9 +189,23 @@ class EveryTilePlusView extends Ui.DataField {
     // touchscreen and the icons have actually been laid out (zSize>0).
     function handleTouch(evt)
     {
-       if (!touchable || !singleDF || (zSize <= 0)) { return; }
+       if (!touchable || !singleDF) { return; }
        var c = evt.getCoordinates();
        var slop = 8;                          // generous finger target
+
+       // north-up / track-up button, top right of the map
+       if ((ouW > 0) &&
+           (c[0] >= ouX - slop) && (c[0] <= ouX + ouW + slop) &&
+           (c[1] >= ouY - slop) && (c[1] <= ouY + ouH + slop))
+       {
+          northUp = !northUp;
+          Storage.setValue("northUp", northUp);
+          playTapTone(Attention.TONE_KEY);
+          Ui.requestUpdate();
+          return;
+       }
+
+       if (zSize <= 0) { return; }
        if (c[1] < zRowY - slop) { return; }   // tap above the control row
        var changed = false;
        var pressed = false;
@@ -259,6 +282,51 @@ class EveryTilePlusView extends Ui.DataField {
                    Gfx.TEXT_JUSTIFY_CENTER);
     }
 
+    // North-up / track-up toggle, in the top-right corner of the map area.
+    // The needle always points to map north, so it stands straight up when the
+    // map is locked north-up and swings round as you turn when it is track-up;
+    // the label underneath names the mode so the state is never ambiguous.
+    // Drawn (and tappable) on touchscreen devices only, like the zoom buttons.
+    function drawOrientButton(dc)
+    {
+       var pad = 6;
+       var mapTop = (landsc == true) ? 0 : ty[0];
+       var od = dx / 6;                        // disc diameter, screen-scaled
+       if (od < 32) { od = 32; }
+       if (od > 72) { od = 72; }
+
+       var lbl = northUp ? "N-UP" : "TRK-UP";
+       var lw = dc.getTextWidthInPixels(lbl, Gfx.FONT_XTINY);
+       var fh = dc.getFontHeight(Gfx.FONT_XTINY);
+       var w = (lw > od) ? lw : od;            // group width (disc or label)
+
+       ouX = dx - pad - w;                     // hit box spans disc + label
+       ouY = mapTop + pad;
+       ouW = w;
+       ouH = od + fh;
+       var cx = ouX + w / 2;
+       var cy = ouY + od / 2;
+
+       var bg = getBackgroundColor();
+       var fg = (bg == Gfx.COLOR_BLACK) ? Gfx.COLOR_WHITE : Gfx.COLOR_BLACK;
+
+       // disc in the field background colour so the needle reads over any tile
+       dc.setColor(bg, bg);
+       dc.fillCircle(cx, cy, od / 2);
+       dc.setPenWidth(2);
+       dc.setColor(fg, Gfx.COLOR_TRANSPARENT);
+       dc.drawCircle(cx, cy, od / 2);
+       dc.setPenWidth(1);
+
+       // north on screen sits at bearing -dispHdg (the map is rotated by it)
+       dirArrow(dc, cx, cy, -dispHdg, od * 0.32, fg);
+
+       dc.setColor(bg, bg);
+       dc.fillRectangle(cx - lw / 2 - 2, ouY + od, lw + 4, fh);
+       dc.setColor(fg, Gfx.COLOR_TRANSPARENT);
+       dc.drawText(cx, ouY + od, Gfx.FONT_XTINY, lbl, Gfx.TEXT_JUSTIFY_CENTER);
+    }
+
     function pxdist(dgr1,dgr2)
     {
        if (  (   ((dgr1[1]-dgr2[1]) * 45.5111111111111 * tileW ).abs().toNumber()>1 ) ||
@@ -289,6 +357,8 @@ class EveryTilePlusView extends Ui.DataField {
        touchable = Sys.getDeviceSettings().isTouchScreen;
        var z = Storage.getValue("manualNv");
        if (z != null) { manualNv = z; }
+       var nu = Storage.getValue("northUp");
+       if (nu != null) { northUp = nu; }
 
        var inf = Act.getActivityInfo();
        if( (inf!=null) && (inf.elapsedTime > 10000) )
@@ -633,10 +703,14 @@ class EveryTilePlusView extends Ui.DataField {
           }
        }
 
-       // Ease dispHdg toward tgtHdg with a soft deadband: gain ramps from very
+       // Ease dispHdg toward the aim with a soft deadband: gain ramps from very
        // low for tiny jitter up to the normal rate by ~10deg, so the grid
        // ignores the constant weave of riding straight but still follows turns.
-       var dh = tgtHdg - dispHdg;
+       // North-up aims at 0 instead (the map stops rotating); the travel
+       // bearing keeps being tracked in tgtHdg, so flipping back to track-up
+       // swings round to the current heading rather than jumping to a stale one.
+       var aim = northUp ? 0.0 : tgtHdg;
+       var dh = aim - dispHdg;
        while (dh >  3.141592653589793) { dh -= 6.283185307179586; }
        while (dh < -3.141592653589793) { dh += 6.283185307179586; }
        var ad = dh.abs();
@@ -698,7 +772,9 @@ class EveryTilePlusView extends Ui.DataField {
     // Black/white so it stands out on any tile colour. The pulse is
     // driven by the system clock (data fields only redraw at ~1Hz, so it throbs
     // rather than animating smoothly); ~3s period gives a visible step each draw.
-    function plotMarker(dc, x, y)
+    // "halo" is false in north-up mode, where the travel arrow drawn underneath
+    // already draws the eye and the ring would only fight it for space.
+    function plotMarker(dc, x, y, halo)
     {
        var t = Sys.getTimer() / 1000.0;                 // seconds since boot
        var ph = (Math.sin(t * 2.094395102) + 1.0) / 2.0; // 0..1, ~3s period
@@ -708,12 +784,15 @@ class EveryTilePlusView extends Ui.DataField {
        var ring = (base + 2 + ph * base).toNumber();    // expanding halo radius
 
        // pulsing halo: white ring with a black edge so it reads on any tile
-       dc.setPenWidth(2);
-       dc.setColor(Gfx.COLOR_BLACK, Gfx.COLOR_TRANSPARENT);
-       dc.drawCircle(x, y, ring + 1);
-       dc.setColor(Gfx.COLOR_WHITE, Gfx.COLOR_TRANSPARENT);
-       dc.drawCircle(x, y, ring);
-       dc.setPenWidth(1);
+       if (halo)
+       {
+          dc.setPenWidth(2);
+          dc.setColor(Gfx.COLOR_BLACK, Gfx.COLOR_TRANSPARENT);
+          dc.drawCircle(x, y, ring + 1);
+          dc.setColor(Gfx.COLOR_WHITE, Gfx.COLOR_TRANSPARENT);
+          dc.drawCircle(x, y, ring);
+          dc.setPenWidth(1);
+       }
 
        // solid centre dot: white fill, black outline
        dc.setColor(Gfx.COLOR_WHITE, Gfx.COLOR_TRANSPARENT);
@@ -973,11 +1052,29 @@ class EveryTilePlusView extends Ui.DataField {
            }
            dc.setPenWidth(1);
 
-           // "you are here" marker at screen centre (a pulsing black/white dot)
-           plotMarker(dc, pcx, pcy);
+           // In north-up the grid no longer shows which way you are pointing,
+           // so the rider gets a travel arrow: on screen the direction of
+           // travel sits at bearing (tgtHdg - dispHdg), which is 0 (straight
+           // up) in track-up and the true heading once the map is locked.
+           if (northUp && hdgInit)
+           {
+              var alen = dts / 2;
+              if (alen < 10) { alen = 10; }
+              if (alen > 28) { alen = 28; }
+              var aang = tgtHdg - dispHdg;
+              dirArrow(dc, pcx, pcy, aang, alen + 2, Gfx.COLOR_BLACK); // outline
+              dirArrow(dc, pcx, pcy, aang, alen, Gfx.COLOR_WHITE);
+           }
 
-           // on-screen zoom buttons (touchscreen devices only)
-           if (touchable) { drawZoomControls(dc); }
+           // "you are here" marker at screen centre (a pulsing black/white dot)
+           plotMarker(dc, pcx, pcy, !northUp);
+
+           // on-screen zoom + orientation buttons (touchscreen devices only)
+           if (touchable)
+           {
+              drawZoomControls(dc);
+              drawOrientButton(dc);
+           }
          }else
          {
             dc.setClip(0,0,dx,dy);
