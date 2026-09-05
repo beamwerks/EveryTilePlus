@@ -16,9 +16,49 @@ using Toybox.Application.Storage;
 using Toybox.Application.Properties;
 
 class map{
-   var bigMap; // compressed map of tiles. 124 rows x 124 columns.
-               // Each value stores 31 bits, 1=visited, 0=unvisited tile
-               // only positive integers are used
+   // ---- the stored tile bitmap ----------------------------------------
+   // A GRID x GRID square of zoom-14 tiles centred on home, one bit each,
+   // 1 = visited. Upstream stored 124x124 (a ~95km radius) and silently
+   // dropped every tile beyond it; GRID now covers a long day out any way
+   // you point.
+   //
+   // It is a ByteArray, not an Array of Number: a ByteArray is exactly one
+   // byte per element, while an Array element carries VM overhead, which at
+   // this size is the difference between fitting the 128KB data-field budget
+   // comfortably and not fitting at all.
+   //
+   // Rows are byte aligned (GRID/8 bytes each) so a tile is addressed with
+   // shifts alone: byte = ly*ROWB + (lx>>3), bit = 1 << (lx&7).
+   const GRID  = 648;              // tiles per side (324 out = ~496km at 51N)
+   const CTR   = 324;              // home sits at local index CTR
+   const ROWB  = 81;               // bytes per row (GRID/8)
+   const TOTB  = 52488;            // ROWB*GRID = 51.3KB
+   const BROWS = 8;                // rows per storage band
+   const BANDB = 648;              // bytes per band (ROWB*BROWS)
+   const NBANDS = 81;              // GRID/BROWS
+
+   // Upstream's 124x124 map put home at local index 61; the same tile now
+   // lands at CTR, so carrying a stored map over is a shift by this much.
+   const OLDG   = 124;
+   const OLDSH  = 263;             // CTR - 61
+
+   // The home defaults shipped in resources/properties/properties.xml. Used to
+   // tell "the rider deliberately set this" from "nobody ever opened settings".
+   const DEF_HLAT = 51.267202;
+   const DEF_HLON = 7.150607;
+
+   var bigMap;                     // ByteArray, TOTB bytes
+   hidden var bandDirty;           // per band: written since the last save?
+
+   // Bounding box of everything visited, in local coords. Keeps the max-square
+   // sweep proportional to the tiles actually ridden rather than to GRID^2
+   // (420k cells), which would be far too slow to run on a tile change.
+   // bbx0 < 0 means nothing has ever been recorded.
+   var bbx0 = -1;
+   var bby0 = -1;
+   var bbx1 = -1;
+   var bby1 = -1;
+
    var ltiles = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
 
    var hlat;     // home latitude
@@ -29,17 +69,11 @@ class map{
    var lati;     // current tile y
    var clon;     // current position x
    var clat;     // current position y
-   // The home defaults shipped in resources/properties/properties.xml. Used to
-   // tell "the rider deliberately set this" from "nobody ever opened settings".
-   const DEF_HLAT = 51.267202;
-   const DEF_HLON = 7.150607;
-
-   var needsAnchor = false; // waiting for a first GPS fix to place home
-
    var newTiles = 0;  // tiles visited for the first time
    var newTilesR = 0; // tiles visited for the first time this ride
    var maxSq = 0;     // side of the largest solid block of visited tiles
    var maxSqDirty = false; // a new tile landed; the square needs recomputing
+   var needsAnchor = false; // waiting for a first GPS fix to place home
 
 
    function lat2lati(lat)
@@ -54,21 +88,49 @@ class map{
       return ((lon + 180.0) * 45.5111111111111).toNumber();
    }
 
+
+   // ---- bit access ------------------------------------------------------
+
+   // Mark local tile (lx,ly) visited, growing the bounding box and flagging
+   // the band that has to be written back.
+   hidden function setLocal(lx, ly)
+   {
+      bigMap[ly*ROWB + (lx>>3)] |= (1 << (lx&7));
+      bandDirty[ly>>3] = true;
+      if (bbx0 < 0)
+      {
+         bbx0 = lx;  bbx1 = lx;  bby0 = ly;  bby1 = ly;
+      }
+      else
+      {
+         if (lx < bbx0) { bbx0 = lx; }
+         if (lx > bbx1) { bbx1 = lx; }
+         if (ly < bby0) { bby0 = ly; }
+         if (ly > bby1) { bby1 = ly; }
+      }
+   }
+
+   hidden function getLocal(lx, ly)
+   {
+      return ((bigMap[ly*ROWB + (lx>>3)] & (1 << (lx&7))) != 0) ? 1 : 0;
+   }
+
+
    function bigmap2lmap(xi,yi)
     {
        var x;
        var y;
-       for(x=xi-hloni+59; x<xi-hloni+64; x++)
+       for(x=xi-hloni+CTR-2; x<xi-hloni+CTR+3; x++)
        {
-          for(y=yi-hlati+59; y<yi-hlati+64; y++)
+          for(y=yi-hlati+CTR-2; y<yi-hlati+CTR+3; y++)
           {
-             if ( (x < 0) || (x>123) || (y<0) || (y>123) )
+             if ( (x < 0) || (x>GRID-1) || (y<0) || (y>GRID-1) )
              {
                 //too far out for permanent storage
-                ltiles[5*(y-yi+hlati-59) + x-xi+hloni-59] = 0;
+                ltiles[5*(y-yi+hlati-CTR+2) + x-xi+hloni-CTR+2] = 0;
              }else
              {
-                ltiles[5*(y-yi+hlati-59) + x-xi+hloni-59] = (bigMap[y*4+x/31] & (1<<(x%31))) >> (x%31);
+                ltiles[5*(y-yi+hlati-CTR+2) + x-xi+hloni-CTR+2] = getLocal(x,y);
              }
           }
        }
@@ -78,11 +140,11 @@ class map{
 
     function setBigMap(xi,yi)
     {
-       xi += (61-hloni);
-       yi += (61-hlati);
-       if ( (xi>=0) && (xi<124) && (yi>=0) && (yi<124) )
+       xi += (CTR-hloni);
+       yi += (CTR-hlati);
+       if ( (xi>=0) && (xi<GRID) && (yi>=0) && (yi<GRID) )
        {
-          bigMap[yi*4+xi/31] |= (1<<(xi%31));
+          setLocal(xi, yi);
        }
     }
 
@@ -150,6 +212,154 @@ class map{
       return 63;   // '_' (95)
    }
 
+   // Column c (0..123) of one decoded seed row. The seed packs 124 columns as
+   // 4 groups of 31: within a group, chars 5w..5w+4 carry 6 bits each (columns
+   // 31w..31w+29) and the row's final char supplies the 31st column of each
+   // group as one of its low 4 bits.
+   hidden function seedBit(vec, c)
+   {
+      var w = c / 31;
+      var r = c % 31;
+      if (r == 30) { return (b64v(vec[20]) >> w) & 1; }
+      return (b64v(vec[5*w + r/6]) >> (r % 6)) & 1;
+   }
+
+
+   // ---- persistence -----------------------------------------------------
+   // The bitmap is stored as NBANDS strips of BROWS rows. A tile change dirties
+   // exactly one band, so a save writes 648 bytes rather than the whole 51KB,
+   // and bands that were never ridden are never written at all.
+
+   hidden function blankMap()
+   {
+      bigMap = new [TOTB]b;
+      bandDirty = new [NBANDS];
+      var i;
+      for (i = 0; i < NBANDS; i++) { bandDirty[i] = false; }
+      bbx0 = -1;  bby0 = -1;  bbx1 = -1;  bby1 = -1;
+   }
+
+   hidden function loadBands()
+   {
+      blankMap();
+      var b;
+      var i;
+      var found = false;
+      for (b = 0; b < NBANDS; b++)
+      {
+         var chunk = Storage.getValue("bm" + b);
+         if (chunk == null) { continue; }
+         if (chunk.size() != BANDB) { continue; }   // corrupt: treat as empty
+         found = true;
+         var off = b * BANDB;
+         for (i = 0; i < BANDB; i++) { bigMap[off+i] = chunk[i]; }
+      }
+      if (found)
+      {
+         var bb = Storage.getValue("bmbb");
+         if ((bb != null) && (bb.size() == 4))
+         {
+            bbx0 = bb[0];  bby0 = bb[1];  bbx1 = bb[2];  bby1 = bb[3];
+         }
+         else
+         {
+            rescanBBox();      // lost or never written: rebuild it
+         }
+      }
+      return found;
+   }
+
+   // Rebuild the visited bounding box from the bitmap. Only needed when the
+   // saved box is missing, so a full sweep is acceptable here.
+   hidden function rescanBBox()
+   {
+      bbx0 = -1;  bby0 = -1;  bbx1 = -1;  bby1 = -1;
+      var y;
+      var xb;
+      var k;
+      for (y = 0; y < GRID; y++)
+      {
+         var off = y * ROWB;
+         for (xb = 0; xb < ROWB; xb++)
+         {
+            var v = bigMap[off+xb];
+            if (v == 0) { continue; }
+            for (k = 0; k < 8; k++)
+            {
+               if ((v & (1<<k)) != 0)
+               {
+                  var lx = (xb<<3) + k;
+                  if (bbx0 < 0)
+                  {
+                     bbx0 = lx;  bbx1 = lx;  bby0 = y;  bby1 = y;
+                  }
+                  else
+                  {
+                     if (lx < bbx0) { bbx0 = lx; }
+                     if (lx > bbx1) { bbx1 = lx; }
+                     if (y  < bby0) { bby0 = y;  }
+                     if (y  > bby1) { bby1 = y;  }
+                  }
+               }
+            }
+         }
+      }
+   }
+
+   // Carry a map saved by an older version (a 496 int Array holding 124x124
+   // centred on local index 61) into the new grid. A pure re-index by OLDSH,
+   // so it is only valid while home is unchanged - the caller checks that.
+   hidden function migrateOldMap()
+   {
+      var old = Storage.getValue("bigMap");
+      if (old == null) { return false; }
+      if (old.size() != 496) { Storage.deleteValue("bigMap"); return false; }
+
+      var x;
+      var y;
+      for (y = 0; y < OLDG; y++)
+      {
+         for (x = 0; x < OLDG; x++)
+         {
+            if ((old[y*4 + x/31] & (1 << (x % 31))) != 0)
+            {
+               setLocal(x + OLDSH, y + OLDSH);
+            }
+         }
+      }
+      save();                          // write the bands out before...
+      Storage.deleteValue("bigMap");   // ...dropping the old copy
+      return true;
+   }
+
+   function save()
+   {
+      var b;
+      var i;
+      for (b = 0; b < NBANDS; b++)
+      {
+         if (!bandDirty[b]) { continue; }
+         var off = b * BANDB;
+         var chunk = new [BANDB]b;
+         for (i = 0; i < BANDB; i++) { chunk[i] = bigMap[off+i]; }
+         Storage.setValue("bm" + b, chunk);
+         bandDirty[b] = false;
+      }
+      Storage.setValue("bmbb", [bbx0, bby0, bbx1, bby1]);
+      Storage.setValue("newTiles",newTiles);
+      Storage.setValue("newTilesR",newTilesR);
+   }
+
+   // Drop every stored band. Used when home moves or a new seed replaces the
+   // map, where the old bits would now name different tiles.
+   hidden function wipeStored()
+   {
+      var b;
+      for (b = 0; b < NBANDS; b++) { Storage.deleteValue("bm" + b); }
+      Storage.deleteValue("bmbb");
+   }
+
+
    // Has the rider actually chosen a home, or is this still the shipped
    // default? Floats, so compare with a tolerance rather than for equality.
    function homeWasSet()
@@ -161,18 +371,11 @@ class map{
    // True while nothing has ever been recorded in the stored bitmap.
    function mapIsEmpty()
    {
-      if (bigMap == null) { return true; }
-      var i;
-      var n = bigMap.size();
-      for (i = 0; i < n; i++)
-      {
-         if (bigMap[i] != 0) { return false; }
-      }
-      return true;
+      return (bbx0 < 0);
    }
 
-   // Pin the stored 124x124 window on the rider's first GPS fix. Called once,
-   // from compute(), when nobody set a home and there is nothing to import --
+   // Pin the stored window on the rider's first GPS fix. Called once, from
+   // compute(), when nobody set a home and there is nothing to import -
    // otherwise such a rider keeps the shipped default (Germany) and, riding
    // anywhere else, silently records nothing at all, for ever.
    //
@@ -207,16 +410,23 @@ class map{
        var vec;
        hlat = Properties.getValue("homeLatitude");
        hlon = Properties.getValue("homeLongitude");
-       bigMap = Storage.getValue("bigMap");
        str = Properties.getValue("bmapstr");
        if (hlat == null) { hlat = DEF_HLAT; }
        if (hlon == null) { hlon = DEF_HLON; }
 
+       var hasSeed = (str != null) && (str.length() == 2604);
+
+       // Load what is already stored, so "has this rider got tiles?" can be
+       // answered before deciding where home goes.
+       if (!loadBands())
+       {
+          migrateOldMap();       // nothing banded yet: carry an older map over
+       }
+
        // No import, and the home setting never touched: hold home until the
        // first GPS fix and pin it there (see anchorHome). Riders who already
-       // have tiles recorded against the default home are left alone -- they
-       // really do ride near it -- as are riders who set a home themselves.
-       var hasSeed = (str != null) && (str.length() == 2604);
+       // have tiles recorded against the default home are left alone - they
+       // really do ride near it - as are riders who set a home themselves.
        if (!hasSeed && !homeWasSet())
        {
           var alat = Storage.getValue("autoHlat");
@@ -242,79 +452,30 @@ class map{
 
        if (hasSeed && (seedChanged || homeChanged))
        {
-          // a new or changed seed string -> decode it, replacing the map
-          bigMap = new[496];
+          // A new or changed seed string -> decode it, replacing the map. The
+          // seed is 124x124 around home, so it lands in the middle of the much
+          // larger grid, offset by OLDSH on both axes.
+          wipeStored();
+          blankMap();
           for (i=0; i<124; i++)
           {
                 vec = str.substring(i*21,i*21+21).toUtf8Array();
-                /*
-                bigMap[i*4]   = ((vec[0]-48) & 0x3f)
-                               +((vec[1]-48) & 0x3f)<<6
-                               +((vec[2]-48) & 0x3f)<<12
-                               +((vec[3]-48) & 0x3f)<<18
-                               +((vec[4]-48) & 0x3f)<<24
-                               +((vec[20]-48) & 0x01)<<30;
-                bigMap[i*4+1] = ((vec[5]-48) & 0x3f)
-                               +((vec[6]-48) & 0x3f)<<6
-                               +((vec[7]-48) & 0x3f)<<12
-                               +((vec[8]-48) & 0x3f)<<18
-                               +((vec[9]-48) & 0x3f)<<24
-                               +((vec[20]-48) & 0x02)<<29;
-                bigMap[i*4+2] = ((vec[10]-48) & 0x3f)
-                               +((vec[11]-48) & 0x3f)<<6
-                               +((vec[12]-48) & 0x3f)<<12
-                               +((vec[13]-48) & 0x3f)<<18
-                               +((vec[14]-48) & 0x3f)<<24
-                               +((vec[20]-48) & 0x04)<<28;
-                bigMap[i*4+3] = ((vec[15]-48) & 0x3f)
-                               +((vec[16]-48) & 0x3f)<<6
-                               +((vec[17]-48) & 0x3f)<<12
-                               +((vec[18]-48) & 0x3f)<<18
-                               +((vec[19]-48) & 0x3f)<<24
-                               +((vec[20]-48) & 0x08)<<27;
-               */
-               // decode 21 base64url chars -> 4 x 31-bit words (columns 0..123)
-               var b = i*4;
-               var ov = b64v(vec[20]);
-               bigMap[b]   = b64v(vec[0])
-                           | (b64v(vec[1])<<6)
-                           | (b64v(vec[2])<<12)
-                           | (b64v(vec[3])<<18)
-                           | (b64v(vec[4])<<24)
-                           | ((ov & 0x01)<<30);
-               bigMap[b+1] = b64v(vec[5])
-                           | (b64v(vec[6])<<6)
-                           | (b64v(vec[7])<<12)
-                           | (b64v(vec[8])<<18)
-                           | (b64v(vec[9])<<24)
-                           | ((ov & 0x02)<<29);
-               bigMap[b+2] = b64v(vec[10])
-                           | (b64v(vec[11])<<6)
-                           | (b64v(vec[12])<<12)
-                           | (b64v(vec[13])<<18)
-                           | (b64v(vec[14])<<24)
-                           | ((ov & 0x04)<<28);
-               bigMap[b+3] = b64v(vec[15])
-                           | (b64v(vec[16])<<6)
-                           | (b64v(vec[17])<<12)
-                           | (b64v(vec[18])<<18)
-                           | (b64v(vec[19])<<24)
-                           | ((ov & 0x08)<<27);
+                var c;
+                for (c = 0; c < 124; c++)
+                {
+                   if (seedBit(vec, c) != 0) { setLocal(c + OLDSH, i + OLDSH); }
+                }
           }
+          save();
           Storage.setValue("bmapApplied", str);
-          Storage.setValue("bigMap", bigMap);
           Storage.setValue("hlat", hlat);
           Storage.setValue("hlon", hlon);
        }
-       else if ((bigMap == null) || homeChanged)
+       else if (homeChanged)
        {
-          // first run (or home moved) with no seed -> start blank
-          bigMap = new[496];
-          for (i=0; i<496; i++)
-          {
-             bigMap[i] = 0;
-          }
-          Storage.setValue("bigMap", bigMap);
+          // Home moved and there is no seed -> the old bits name other tiles.
+          wipeStored();
+          blankMap();
           Storage.setValue("hlat", hlat);
           Storage.setValue("hlon", hlon);
        }
@@ -331,141 +492,141 @@ class map{
        computeMaxSquare();
    }
 
-   // "Max square": the side of the largest solid square of visited tiles
-   // anywhere in the saved 124x124 area (the VeloViewer metric) - ride every
-   // tile of a 5x5 block and it reads 5. Classic maximal-square DP: each cell
-   // holds the side of the biggest solid square whose bottom-right corner it
-   // is, which is 1 + the smallest of its north, west and north-west
-   // neighbours. Only two rows are kept (~1KB) and the columns are walked a
-   // 31-bit word at a time to keep the inner loop free of division. One sweep
-   // is ~15k cells, so it runs at startup and then only when maxSqDirty says a
-   // never-before-visited tile has been added.
-   function computeMaxSquare()
-   {
-      var prev = new[125];
-      var cur  = new[125];
-      var i;
-      for (i = 0; i <= 124; i++) { prev[i] = 0; cur[i] = 0; }
-
-      var best = 0;
-      var y;
-      var wi;
-      var b;
-      for (y = 0; y < 124; y++)
-      {
-         var base = y * 4;
-         var c = 1;                     // array index = column + 1 (col -1 = 0)
-         for (wi = 0; wi < 4; wi++)
-         {
-            var word = bigMap[base + wi];
-            for (b = 0; b < 31; b++)
-            {
-               if ((word & (1 << b)) != 0)
-               {
-                  var m = prev[c];                            // north
-                  if (cur[c-1]  < m) { m = cur[c-1];  }       // west
-                  if (prev[c-1] < m) { m = prev[c-1]; }       // north-west
-                  m++;
-                  cur[c] = m;
-                  if (m > best) { best = m; }
-               }
-               else
-               {
-                  cur[c] = 0;
-               }
-               c++;
-            }
-         }
-         var t = prev;  prev = cur;  cur = t;
-      }
-
-      maxSq = best;
-      maxSqDirty = false;
-   }
-
    // 1 if the global tile (gx,gy) has ever been visited, else 0 (for display).
    function tileVisited(gx, gy)
    {
-      var lx = gx - hloni + 61;
-      var ly = gy - hlati + 61;
-      if ((lx < 0) || (lx > 123) || (ly < 0) || (ly > 123))
+      var lx = gx - hloni + CTR;
+      var ly = gy - hlati + CTR;
+      if ((lx < 0) || (lx > GRID-1) || (ly < 0) || (ly > GRID-1))
       {
          return 0;
       }
-      return ((bigMap[ly*4 + lx/31] & (1 << (lx % 31))) != 0) ? 1 : 0;
+      return getLocal(lx, ly);
    }
 
-   // Is the global tile (gx,gy) never-visited? Tiles outside the saved 124x124
-   // area are unknown, so we treat them as new too.
+   // Is the global tile (gx,gy) never-visited? Tiles outside the saved area
+   // are unknown, so we treat them as new too.
    function isUnexplored(gx, gy)
    {
-      var lx = gx - hloni + 61;
-      var ly = gy - hlati + 61;
-      if ((lx < 0) || (lx > 123) || (ly < 0) || (ly > 123))
+      var lx = gx - hloni + CTR;
+      var ly = gy - hlati + CTR;
+      if ((lx < 0) || (lx > GRID-1) || (ly < 0) || (ly > GRID-1))
       {
          return true;
       }
-      return ((bigMap[ly*4 + lx/31] & (1 << (lx % 31))) == 0);
+      return (getLocal(lx, ly) == 0);
+   }
+
+
+   // "Max square": the side of the largest solid square of visited tiles (the
+   // VeloViewer metric) - ride every tile of a 5x5 block and it reads 5.
+   // Classic maximal-square DP: each cell holds the side of the biggest solid
+   // square whose bottom-right corner it is, which is 1 + the smallest of its
+   // north, west and north-west neighbours. Only two rows are kept, and the
+   // sweep covers just the visited bounding box rather than all GRID^2 cells,
+   // so it costs what the rider has actually ridden. Run at startup and then
+   // only when maxSqDirty says a never-before-visited tile has been added.
+   function computeMaxSquare()
+   {
+      maxSqDirty = false;
+      if (bbx0 < 0) { maxSq = 0; return; }
+
+      var w = bbx1 - bbx0 + 1;
+      var prev = new[w+1];
+      var cur  = new[w+1];
+      var i;
+      for (i = 0; i <= w; i++) { prev[i] = 0; cur[i] = 0; }
+
+      var best = 0;
+      var x;
+      var y;
+      for (y = bby0; y <= bby1; y++)
+      {
+         var off = y * ROWB;
+         var c = 1;
+         for (x = bbx0; x <= bbx1; x++)
+         {
+            if ((bigMap[off + (x>>3)] & (1 << (x&7))) != 0)
+            {
+               var m = prev[c];                            // north
+               if (cur[c-1]  < m) { m = cur[c-1];  }       // west
+               if (prev[c-1] < m) { m = prev[c-1]; }       // north-west
+               m++;
+               cur[c] = m;
+               if (m > best) { best = m; }
+            }
+            else
+            {
+               cur[c] = 0;
+            }
+            c++;
+         }
+         var t = prev;  prev = cur;  cur = t;
+         cur[0] = 0;
+      }
+
+      maxSq = best;
+   }
+
+
+   hidden var nntBest = null;
+   hidden var nntBestD = 0.0;
+
+   // Consider one tile for "nearest new tile", scoring it by the distance from
+   // (fx,fy) to its NEAREST POINT so the tile you are about to ride into wins
+   // over equidistant neighbours.
+   hidden function nntCheck(x, y, fx, fy)
+   {
+      if (!isUnexplored(x, y)) { return; }
+      var ddx = 0.0;
+      if (fx < x)          { ddx = x - fx; }
+      else if (fx > x + 1) { ddx = fx - (x + 1); }
+      var ddy = 0.0;
+      if (fy < y)          { ddy = y - fy; }
+      else if (fy > y + 1) { ddy = fy - (y + 1); }
+      var dd = ddx * ddx + ddy * ddy;
+      if ((nntBest == null) || (dd < nntBestD))
+      {
+         nntBest = [x, y];
+         nntBestD = dd;
+      }
    }
 
    // Nearest never-visited ("new") tile to the current position (fx,fy in
    // fractional tile coords), as global tile coords [x,y]; null if none found.
-   // Selection uses the distance from (fx,fy) to the *nearest point* of each
-   // tile, so the tile you are about to ride into wins over equidistant
-   // neighbours. Expanding-ring search bounds the work; two extra rings are
-   // scanned past the first hit so a closer tile can't be missed.
+   // Expanding-ring search bounds the work; two extra rings are scanned past
+   // the first hit so a closer tile cannot be missed. Only the ring's PERIMETER
+   // is walked - rescanning the whole square each ring is O(r^3) overall, which
+   // the old 124 limit just about tolerated and this grid would not.
    function nearestNewTile(fx, fy)
    {
       var cx = loni;
       var cy = lati;
-      var best = null;
-      var bestD = 0.0;
+      nntBest = null;
+      nntBestD = 0.0;
       var stopR = -1;
       var r;
       var x;
       var y;
-      for (r = 1; r <= 124; r++)
+      for (r = 1; r <= GRID; r++)
       {
          for (x = cx - r; x <= cx + r; x++)
          {
-            for (y = cy - r; y <= cy + r; y++)
-            {
-               // ring only - skip the interior already scanned at smaller r
-               if ((x > cx - r) && (x < cx + r) && (y > cy - r) && (y < cy + r))
-               {
-                  continue;
-               }
-               if (isUnexplored(x, y))
-               {
-                  var ddx = 0.0;
-                  if (fx < x)     { ddx = x - fx; }
-                  else if (fx > x + 1) { ddx = fx - (x + 1); }
-                  var ddy = 0.0;
-                  if (fy < y)     { ddy = y - fy; }
-                  else if (fy > y + 1) { ddy = fy - (y + 1); }
-                  var dd = ddx * ddx + ddy * ddy;
-                  if ((best == null) || (dd < bestD))
-                  {
-                     best = [x, y];
-                     bestD = dd;
-                  }
-               }
-            }
+            nntCheck(x, cy - r, fx, fy);
+            nntCheck(x, cy + r, fx, fy);
          }
-         if (best != null)
+         for (y = cy - r + 1; y <= cy + r - 1; y++)
+         {
+            nntCheck(cx - r, y, fx, fy);
+            nntCheck(cx + r, y, fx, fy);
+         }
+         if (nntBest != null)
          {
             if (stopR < 0) { stopR = r + 2; }
             if (r >= stopR) { break; }
          }
       }
-      return best;
-   }
-
-   function save()
-   {
-      Storage.setValue("bigMap",bigMap);
-      Storage.setValue("newTiles",newTiles);
-      Storage.setValue("newTilesR",newTilesR);
+      return nntBest;
    }
 
 }
