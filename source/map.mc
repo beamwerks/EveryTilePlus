@@ -309,11 +309,16 @@ class map{
    // Carry a map saved by an older version (a 496 int Array holding 124x124
    // centred on local index 61) into the new grid. A pure re-index by OLDSH,
    // so it is only valid while home is unchanged - the caller checks that.
+   //
+   // The old key is deliberately LEFT IN PLACE rather than deleted. It costs
+   // about 2KB and nothing ever writes to it again, but it means a rider who
+   // goes back to an older build still has their map: migration is a copy, not
+   // a move. Worth 2KB to make the one upgrade that cannot be undone undoable.
    hidden function migrateOldMap()
    {
       var old = Storage.getValue("bigMap");
       if (old == null) { return false; }
-      if (old.size() != 496) { Storage.deleteValue("bigMap"); return false; }
+      if (old.size() != 496) { return false; }
 
       var x;
       var y;
@@ -327,8 +332,7 @@ class map{
             }
          }
       }
-      save();                          // write the bands out before...
-      Storage.deleteValue("bigMap");   // ...dropping the old copy
+      save();       // write the bands out; the old key stays as a fallback
       return true;
    }
 

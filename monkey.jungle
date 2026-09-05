@@ -1,5 +1,12 @@
 project.manifest = manifest.xml
 
+# Declared explicitly rather than left to the implicit default: the default
+# source path resolves relative to the MANIFEST, and the shared parallel
+# release-build tool writes a per-group manifest into its own scratch dir, so
+# the default would look for source/ next to that and find nothing ("Cannot
+# find entry point class"). Relative to the jungle, this always resolves here.
+base.sourcePath = source
+
 # Zoom-control icons are shared (not copied) from the Radar+ / WindField icon
 # set. Each device pulls its local "resources" plus the radarIcons drawables at
 # the matching resolution (40px medRez / 64px highRez).
