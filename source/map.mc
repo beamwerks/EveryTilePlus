@@ -82,6 +82,12 @@ class map{
    var maxSqDirty = false; // a new tile landed; the square needs recomputing
    var needsAnchor = false; // waiting for a first GPS fix to place home
 
+   // One-line migration diagnostic, drawn on screen so an upgrade that goes
+   // wrong on hardware can be read off the device instead of guessed at.
+   var dbgOld = 0;    // size of the old stored map: 496, another size, or -1
+   var dbgShift = 0;  // x shift used to re-centre it
+   var dbgTiles = 0;  // tiles carried across
+
 
    function lat2lati(lat)
    {
@@ -336,21 +342,46 @@ class map{
    hidden function migrateOldMap()
    {
       var old = Storage.getValue("bigMap");
-      if (old == null) { return false; }
-      if (old.size() != 496) { return false; }
+      if (old == null) { dbgOld = -1; return false; }
+      if (old.size() != 496) { dbgOld = old.size(); return false; }
+      dbgOld = 496;
+
+      // The old map was stored relative to whatever home that build was using.
+      // If that home is still recorded, re-centre against IT rather than
+      // assuming it matches the current one. A home that has since moved then
+      // shifts the tiles to where they actually belong, instead of the map
+      // being read as stale and thrown away - which is what destroyed it on
+      // the first 1.1.0 install over a store build.
+      var shx = OLDSH;
+      var shy = OLDSH;
+      var ohlat = Storage.getValue("hlat");
+      var ohlon = Storage.getValue("hlon");
+      if ((ohlat != null) && (ohlon != null))
+      {
+         shx = OLDSH + (lon2loni(ohlon) - hloni);
+         shy = OLDSH + (lat2lati(ohlat) - hlati);
+      }
+      dbgShift = shx;
 
       var x;
       var y;
+      var n = 0;
       for (y = 0; y < OLDG; y++)
       {
+         var ny = y + shy;
+         if ((ny < 0) || (ny >= GRID)) { continue; }
          for (x = 0; x < OLDG; x++)
          {
+            var nx = x + shx;
+            if ((nx < 0) || (nx >= GRID)) { continue; }
             if ((old[y*4 + x/31] & (1 << (x % 31))) != 0)
             {
-               setLocal(x + OLDSH, y + OLDSH);
+               setLocal(nx, ny);
+               n++;
             }
          }
       }
+      dbgTiles = n;
       save();       // write the bands out; the old key stays as a fallback
       return true;
    }
@@ -433,6 +464,10 @@ class map{
        str = Properties.getValue("bmapstr");
        if (hlat == null) { hlat = DEF_HLAT; }
        if (hlon == null) { hlon = DEF_HLON; }
+       // needed by migrateOldMap() below; recomputed at the end, and again by
+       // anchorHome() if the first GPS fix ends up placing home.
+       hlati = lat2lati(hlat);
+       hloni = lon2loni(hlon);
 
        var hasSeed = (str != null) && (str.length() == 2604);
 
@@ -455,12 +490,12 @@ class map{
        // unequal, and is still honoured with a wipe.
        if (migrated)
        {
-          if (Storage.getValue("hlat") == null) { Storage.setValue("hlat", hlat); }
-          if (Storage.getValue("hlon") == null) { Storage.setValue("hlon", hlon); }
-          if (hasSeed && (Storage.getValue("bmapApplied") == null))
-          {
-             Storage.setValue("bmapApplied", str);
-          }
+          // The migrated bits are now expressed against the CURRENT home, so
+          // nothing downstream should treat this as a home change and wipe
+          // them. A genuinely moved home was already handled by re-centring.
+          Storage.setValue("hlat", hlat);
+          Storage.setValue("hlon", hlon);
+          if (hasSeed) { Storage.setValue("bmapApplied", str); }
        }
 
        // No import, and the home setting never touched: hold home until the

@@ -376,6 +376,27 @@ class EveryTilePlusView extends Ui.DataField {
        dc.drawText(bx + w / 2, by + fhL, Gfx.FONT_SMALL, val, Gfx.TEXT_JUSTIFY_CENTER);
     }
 
+    // TEMPORARY beta diagnostic: what the upgrade actually found in storage.
+    //   m = size of the old stored map (496 = found, -1 = absent, other = odd)
+    //   s = shift used to re-centre it onto the current home
+    //   t = tiles carried across        q = resulting max square
+    // Lets a migration that misbehaves on hardware be read off the device
+    // instead of guessed at. Remove once the upgrade path is proven.
+    function drawMigDebug(dc)
+    {
+       var txt = "m" + mp.dbgOld.format("%i") + " s" + mp.dbgShift.format("%i") +
+                 " t" + mp.dbgTiles.format("%i") + " q" + mp.maxSq.format("%i");
+       var fh = dc.getFontHeight(Gfx.FONT_XTINY);
+       var w = dc.getTextWidthInPixels(txt, Gfx.FONT_XTINY);
+       var by = dy - fh - 2;
+       var bg = getBackgroundColor();
+       dc.setColor(bg, bg);
+       dc.fillRectangle(0, by, w + 6, fh);
+       dc.setColor((bg == Gfx.COLOR_BLACK) ? Gfx.COLOR_WHITE : Gfx.COLOR_BLACK,
+                   Gfx.COLOR_TRANSPARENT);
+       dc.drawText(3, by, Gfx.FONT_XTINY, txt, Gfx.TEXT_JUSTIFY_LEFT);
+    }
+
     function pxdist(dgr1,dgr2)
     {
        if (  (   ((dgr1[1]-dgr2[1]) * 45.5111111111111 * tileW ).abs().toNumber()>1 ) ||
@@ -1136,6 +1157,7 @@ class EveryTilePlusView extends Ui.DataField {
            plotMarker(dc, pcx, pcy, !northUp);
 
            drawMaxSquare(dc);
+           drawMigDebug(dc);
 
            // on-screen zoom + orientation buttons (touchscreen devices only)
            if (touchable)
