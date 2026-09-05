@@ -438,9 +438,29 @@ class map{
 
        // Load what is already stored, so "has this rider got tiles?" can be
        // answered before deciding where home goes.
+       var migrated = false;
        if (!loadBands())
        {
-          migrateOldMap();       // nothing banded yet: carry an older map over
+          migrated = migrateOldMap();   // nothing banded: carry an older map over
+       }
+
+       // A map carried over from an older version was built by that version
+       // against the home it was already running with, so by definition home
+       // has not moved and any seed has already been applied. Older builds did
+       // not always record hlat/hlon though, and the checks below read a
+       // missing value as "home moved" and wipe the map that was just
+       // recovered - which is exactly what happened on the first 1.1.0 install
+       // over a store build. Stamp only the keys that are MISSING: a home that
+       // genuinely changed still has both values stored, still compares
+       // unequal, and is still honoured with a wipe.
+       if (migrated)
+       {
+          if (Storage.getValue("hlat") == null) { Storage.setValue("hlat", hlat); }
+          if (Storage.getValue("hlon") == null) { Storage.setValue("hlon", hlon); }
+          if (hasSeed && (Storage.getValue("bmapApplied") == null))
+          {
+             Storage.setValue("bmapApplied", str);
+          }
        }
 
        // No import, and the home setting never touched: hold home until the
