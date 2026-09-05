@@ -327,6 +327,37 @@ class EveryTilePlusView extends Ui.DataField {
        dc.drawText(cx, ouY + od, Gfx.FONT_XTINY, lbl, Gfx.TEXT_JUSTIFY_CENTER);
     }
 
+    // "Max square" readout: the side of the largest solid block of explored
+    // tiles (ride every tile of a 5x5 block and it reads 5). Sits in the
+    // top-left corner of the map, mirroring the orientation button opposite,
+    // so it costs no header height. Painted on a background-coloured patch so
+    // it stays legible over whatever tile colours are underneath.
+    function drawMaxSquare(dc)
+    {
+       var pad = 6;
+       var mapTop  = (landsc == true) ? 0 : ty[0];
+       var mapLeft = (landsc == true) ? tx[0] : 0;
+
+       var lbl = "MAX SQ";
+       var val = mp.maxSq.format("%i");
+       var fhL = dc.getFontHeight(Gfx.FONT_XTINY);
+       var fhV = dc.getFontHeight(Gfx.FONT_SMALL);
+       var wL = dc.getTextWidthInPixels(lbl, Gfx.FONT_XTINY);
+       var wV = dc.getTextWidthInPixels(val, Gfx.FONT_SMALL);
+       var w = (wL > wV) ? wL : wV;
+
+       var bx = mapLeft + pad;
+       var by = mapTop + pad;
+       var bg = getBackgroundColor();
+       var fg = (bg == Gfx.COLOR_BLACK) ? Gfx.COLOR_WHITE : Gfx.COLOR_BLACK;
+
+       dc.setColor(bg, bg);
+       dc.fillRectangle(bx - 3, by - 2, w + 6, fhL + fhV + 4);
+       dc.setColor(fg, Gfx.COLOR_TRANSPARENT);
+       dc.drawText(bx + w / 2, by,       Gfx.FONT_XTINY, lbl, Gfx.TEXT_JUSTIFY_CENTER);
+       dc.drawText(bx + w / 2, by + fhL, Gfx.FONT_SMALL, val, Gfx.TEXT_JUSTIFY_CENTER);
+    }
+
     function pxdist(dgr1,dgr2)
     {
        if (  (   ((dgr1[1]-dgr2[1]) * 45.5111111111111 * tileW ).abs().toNumber()>1 ) ||
@@ -738,6 +769,13 @@ class EveryTilePlusView extends Ui.DataField {
           pt.p = new[100];
           pt.set(0,dgr);
        }
+       else if (mp.maxSqDirty)
+       {
+          // A new tile can have grown the max square. The sweep is held over
+          // to the next tick so it never lands in the same call as the storage
+          // save/load above; a second later the readout is up to date.
+          mp.computeMaxSquare();
+       }
     }
 
 
@@ -1068,6 +1106,8 @@ class EveryTilePlusView extends Ui.DataField {
 
            // "you are here" marker at screen centre (a pulsing black/white dot)
            plotMarker(dc, pcx, pcy, !northUp);
+
+           drawMaxSquare(dc);
 
            // on-screen zoom + orientation buttons (touchscreen devices only)
            if (touchable)

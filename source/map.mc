@@ -31,6 +31,8 @@ class map{
    var clat;     // current position y
    var newTiles = 0;  // tiles visited for the first time
    var newTilesR = 0; // tiles visited for the first time this ride
+   var maxSq = 0;     // side of the largest solid block of visited tiles
+   var maxSqDirty = false; // a new tile landed; the square needs recomputing
 
 
    function lat2lati(lat)
@@ -121,6 +123,10 @@ class map{
       {
          newTilesR++;
          newTiles++;
+         // only a brand new tile can grow the max square. The sweep itself is
+         // deferred (see computeMaxSquare) so it never shares a tick with the
+         // storage save the caller does right after this.
+         maxSqDirty = true;
       }
       ltiles[12]=2;
    }
@@ -244,6 +250,59 @@ class map{
        newTiles=0;
        newTilesR=0;
        bigmap2lmap(hloni,hlati);
+       computeMaxSquare();
+   }
+
+   // "Max square": the side of the largest solid square of visited tiles
+   // anywhere in the saved 124x124 area (the VeloViewer metric) - ride every
+   // tile of a 5x5 block and it reads 5. Classic maximal-square DP: each cell
+   // holds the side of the biggest solid square whose bottom-right corner it
+   // is, which is 1 + the smallest of its north, west and north-west
+   // neighbours. Only two rows are kept (~1KB) and the columns are walked a
+   // 31-bit word at a time to keep the inner loop free of division. One sweep
+   // is ~15k cells, so it runs at startup and then only when maxSqDirty says a
+   // never-before-visited tile has been added.
+   function computeMaxSquare()
+   {
+      var prev = new[125];
+      var cur  = new[125];
+      var i;
+      for (i = 0; i <= 124; i++) { prev[i] = 0; cur[i] = 0; }
+
+      var best = 0;
+      var y;
+      var wi;
+      var b;
+      for (y = 0; y < 124; y++)
+      {
+         var base = y * 4;
+         var c = 1;                     // array index = column + 1 (col -1 = 0)
+         for (wi = 0; wi < 4; wi++)
+         {
+            var word = bigMap[base + wi];
+            for (b = 0; b < 31; b++)
+            {
+               if ((word & (1 << b)) != 0)
+               {
+                  var m = prev[c];                            // north
+                  if (cur[c-1]  < m) { m = cur[c-1];  }       // west
+                  if (prev[c-1] < m) { m = prev[c-1]; }       // north-west
+                  m++;
+                  cur[c] = m;
+                  if (m > best) { best = m; }
+               }
+               else
+               {
+                  cur[c] = 0;
+               }
+               c++;
+            }
+         }
+         var t = prev;  prev = cur;  cur = t;
+      }
+
+      maxSq = best;
+      maxSqDirty = false;
    }
 
    // 1 if the global tile (gx,gy) has ever been visited, else 0 (for display).
