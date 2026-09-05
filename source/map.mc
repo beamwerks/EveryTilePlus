@@ -32,7 +32,6 @@ class map{
    const GRID  = 648;              // tiles per side (324 out = ~496km at 51N)
    const CTR   = 324;              // home sits at local index CTR
    const ROWB  = 81;               // bytes per row (GRID/8)
-   const TOTB  = 52488;            // ROWB*GRID = 51.3KB
    const BROWS = 8;                // rows per storage band
    const BANDB = 648;              // bytes per band (ROWB*BROWS)
    const NBANDS = 81;              // GRID/BROWS
@@ -47,7 +46,15 @@ class map{
    const DEF_HLAT = 51.267202;
    const DEF_HLON = 7.150607;
 
-   var bigMap;                     // ByteArray, TOTB bytes
+   // bands[b] is null until something is ridden in those BROWS rows, and a
+   // BANDB-byte ByteArray after that. Lazy, per-band allocation is what keeps
+   // this inside a data field's heap: the whole grid as ONE 51KB ByteArray is a
+   // contiguous block the device cannot hand out, and it dies at startup with
+   // an Out Of Memory Error even though the total looks like it fits inside
+   // 128KB (the simulator allocates it happily - hardware does not). This way
+   // the largest single allocation is 648 bytes, a fresh install allocates no
+   // bands at all, and RAM grows with the area actually explored.
+   var bands;                      // Array<ByteArray or Null>, NBANDS entries
    hidden var bandDirty;           // per band: written since the last save?
 
    // Bounding box of everything visited, in local coords. Keeps the max-square
@@ -95,8 +102,11 @@ class map{
    // the band that has to be written back.
    hidden function setLocal(lx, ly)
    {
-      bigMap[ly*ROWB + (lx>>3)] |= (1 << (lx&7));
-      bandDirty[ly>>3] = true;
+      var b = ly >> 3;
+      var ba = bands[b];
+      if (ba == null) { ba = new [BANDB]b; bands[b] = ba; }
+      ba[(ly & 7)*ROWB + (lx>>3)] |= (1 << (lx&7));
+      bandDirty[b] = true;
       if (bbx0 < 0)
       {
          bbx0 = lx;  bbx1 = lx;  bby0 = ly;  bby1 = ly;
@@ -112,7 +122,9 @@ class map{
 
    hidden function getLocal(lx, ly)
    {
-      return ((bigMap[ly*ROWB + (lx>>3)] & (1 << (lx&7))) != 0) ? 1 : 0;
+      var ba = bands[ly >> 3];
+      if (ba == null) { return 0; }         // never ridden: no band allocated
+      return ((ba[(ly & 7)*ROWB + (lx>>3)] & (1 << (lx&7))) != 0) ? 1 : 0;
    }
 
 
@@ -232,10 +244,10 @@ class map{
 
    hidden function blankMap()
    {
-      bigMap = new [TOTB]b;
+      bands = new [NBANDS];
       bandDirty = new [NBANDS];
       var i;
-      for (i = 0; i < NBANDS; i++) { bandDirty[i] = false; }
+      for (i = 0; i < NBANDS; i++) { bands[i] = null; bandDirty[i] = false; }
       bbx0 = -1;  bby0 = -1;  bbx1 = -1;  bby1 = -1;
    }
 
@@ -251,8 +263,7 @@ class map{
          if (chunk == null) { continue; }
          if (chunk.size() != BANDB) { continue; }   // corrupt: treat as empty
          found = true;
-         var off = b * BANDB;
-         for (i = 0; i < BANDB; i++) { bigMap[off+i] = chunk[i]; }
+         bands[b] = chunk;      // adopt it as-is; no copy, no extra allocation
       }
       if (found)
       {
@@ -274,15 +285,22 @@ class map{
    hidden function rescanBBox()
    {
       bbx0 = -1;  bby0 = -1;  bbx1 = -1;  bby1 = -1;
+      var b;
+      var r;
       var y;
       var xb;
       var k;
-      for (y = 0; y < GRID; y++)
+      for (b = 0; b < NBANDS; b++)
       {
-         var off = y * ROWB;
+         var ba = bands[b];
+         if (ba == null) { continue; }      // whole strip never ridden
+         for (r = 0; r < BROWS; r++)
+         {
+         y = (b << 3) + r;
+         var off = r * ROWB;
          for (xb = 0; xb < ROWB; xb++)
          {
-            var v = bigMap[off+xb];
+            var v = ba[off+xb];
             if (v == 0) { continue; }
             for (k = 0; k < 8; k++)
             {
@@ -302,6 +320,7 @@ class map{
                   }
                }
             }
+         }
          }
       }
    }
@@ -343,10 +362,7 @@ class map{
       for (b = 0; b < NBANDS; b++)
       {
          if (!bandDirty[b]) { continue; }
-         var off = b * BANDB;
-         var chunk = new [BANDB]b;
-         for (i = 0; i < BANDB; i++) { chunk[i] = bigMap[off+i]; }
-         Storage.setValue("bm" + b, chunk);
+         Storage.setValue("bm" + b, bands[b]);
          bandDirty[b] = false;
       }
       Storage.setValue("bmbb", [bbx0, bby0, bbx1, bby1]);
@@ -546,11 +562,12 @@ class map{
       var y;
       for (y = bby0; y <= bby1; y++)
       {
-         var off = y * ROWB;
+         var ba = bands[y >> 3];
+         var off = (y & 7) * ROWB;
          var c = 1;
          for (x = bbx0; x <= bbx1; x++)
          {
-            if ((bigMap[off + (x>>3)] & (1 << (x&7))) != 0)
+            if ((ba != null) && ((ba[off + (x>>3)] & (1 << (x&7))) != 0))
             {
                var m = prev[c];                            // north
                if (cur[c-1]  < m) { m = cur[c-1];  }       // west
