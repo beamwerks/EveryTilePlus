@@ -3,6 +3,7 @@
 *.prg
 *.prg.debug.xml
 *.iq
+*.meta.json
 *.mir
 *.mbc
 
