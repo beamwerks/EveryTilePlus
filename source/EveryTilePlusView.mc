@@ -385,7 +385,8 @@ class EveryTilePlusView extends Ui.DataField {
     function drawMigDebug(dc)
     {
        var txt = "m" + mp.dbgOld.format("%i") + " s" + mp.dbgShift.format("%i") +
-                 " t" + mp.dbgTiles.format("%i") + " q" + mp.maxSq.format("%i");
+                 " t" + mp.dbgTiles.format("%i") + " v" + mp.dbgVis.format("%i") +
+                 " q" + mp.maxSq.format("%i");
        var fh = dc.getFontHeight(Gfx.FONT_XTINY);
        var w = dc.getTextWidthInPixels(txt, Gfx.FONT_XTINY);
        var by = dy - fh - 2;

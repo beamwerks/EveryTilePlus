@@ -87,6 +87,9 @@ class map{
    var dbgOld = 0;    // size of the old stored map: 496, another size, or -1
    var dbgShift = 0;  // x shift used to re-centre it
    var dbgTiles = 0;  // tiles carried across
+   var dbgVis = 0;    // tiles actually set in the map (should equal dbgTiles
+                      // right after a migration; if it is larger, something is
+                      // setting bits nobody wrote)
 
 
    function lat2lati(lat)
@@ -110,7 +113,7 @@ class map{
    {
       var b = ly >> 3;
       var ba = bands[b];
-      if (ba == null) { ba = new [BANDB]b; bands[b] = ba; }
+      if (ba == null) { ba = newBand(); bands[b] = ba; }
       ba[(ly & 7)*ROWB + (lx>>3)] |= (1 << (lx&7));
       bandDirty[b] = true;
       if (bbx0 < 0)
@@ -124,6 +127,19 @@ class map{
          if (ly < bby0) { bby0 = ly; }
          if (ly > bby1) { bby1 = ly; }
       }
+   }
+
+   // A fresh, all-zero band. The zeroing is explicit because the SDK does not
+   // document whether "new [n]b" clears the memory it hands back, and a band
+   // that starts with stale heap content shows up as tiles the rider never
+   // rode - which reads as a plausible-looking map with an impossible max
+   // square, not as an obvious fault.
+   hidden function newBand()
+   {
+      var ba = new [BANDB]b;
+      var i;
+      for (i = 0; i < BANDB; i++) { ba[i] = 0; }
+      return ba;
    }
 
    hidden function getLocal(lx, ly)
@@ -633,6 +649,7 @@ class map{
       for (i = 0; i <= w; i++) { prev[i] = 0; cur[i] = 0; }
 
       var best = 0;
+      var nvis = 0;
       var x;
       var y;
       for (y = bby0; y <= bby1; y++)
@@ -649,6 +666,7 @@ class map{
                if (prev[c-1] < m) { m = prev[c-1]; }       // north-west
                m++;
                cur[c] = m;
+               nvis++;
                if (m > best) { best = m; }
             }
             else
@@ -662,6 +680,7 @@ class map{
       }
 
       maxSq = best;
+      dbgVis = nvis;
    }
 
 
