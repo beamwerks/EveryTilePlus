@@ -82,15 +82,6 @@ class map{
    var maxSqDirty = false; // a new tile landed; the square needs recomputing
    var needsAnchor = false; // waiting for a first GPS fix to place home
 
-   // One-line migration diagnostic, drawn on screen so an upgrade that goes
-   // wrong on hardware can be read off the device instead of guessed at.
-   var dbgOld = 0;    // size of the old stored map: 496, another size, or -1
-   var dbgShift = 0;  // x shift used to re-centre it
-   var dbgTiles = 0;  // tiles carried across
-   var dbgVis = 0;    // tiles actually set in the map (should equal dbgTiles
-                      // right after a migration; if it is larger, something is
-                      // setting bits nobody wrote)
-
 
    function lat2lati(lat)
    {
@@ -375,12 +366,10 @@ class map{
       }
       catch (ex)
       {
-         dbgOld = -2;        // store unreadable
-         return false;
+         return false;       // store unreadable
       }
-      if (old == null) { dbgOld = -1; return false; }
-      if (old.size() != 496) { dbgOld = old.size(); return false; }
-      dbgOld = 496;
+      if (old == null) { return false; }
+      if (old.size() != 496) { return false; }
 
       // The old map was stored relative to whatever home that build was using.
       // If that home is still recorded, re-centre against IT rather than
@@ -397,11 +386,8 @@ class map{
          shx = OLDSH + (lon2loni(ohlon) - hloni);
          shy = OLDSH + (lat2lati(ohlat) - hlati);
       }
-      dbgShift = shx;
-
       var x;
       var y;
-      var n = 0;
       for (y = 0; y < OLDG; y++)
       {
          var ny = y + shy;
@@ -413,11 +399,9 @@ class map{
             if ((old[y*4 + x/31] & (1 << (x % 31))) != 0)
             {
                setLocal(nx, ny);
-               n++;
             }
          }
       }
-      dbgTiles = n;
       save();       // write the bands out; the old key stays as a fallback
       return true;
    }
@@ -649,7 +633,6 @@ class map{
       for (i = 0; i <= w; i++) { prev[i] = 0; cur[i] = 0; }
 
       var best = 0;
-      var nvis = 0;
       var x;
       var y;
       for (y = bby0; y <= bby1; y++)
@@ -666,7 +649,6 @@ class map{
                if (prev[c-1] < m) { m = prev[c-1]; }       // north-west
                m++;
                cur[c] = m;
-               nvis++;
                if (m > best) { best = m; }
             }
             else
@@ -680,7 +662,6 @@ class map{
       }
 
       maxSq = best;
-      dbgVis = nvis;
    }
 
 
