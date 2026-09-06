@@ -265,7 +265,8 @@ class map{
       var found = false;
       for (b = 0; b < NBANDS; b++)
       {
-         var chunk = Storage.getValue("bm" + b);
+         var chunk = null;
+         try { chunk = Storage.getValue("bm" + b); } catch (ex) { chunk = null; }
          if (chunk == null) { continue; }
          if (chunk.size() != BANDB) { continue; }   // corrupt: treat as empty
          found = true;
@@ -341,7 +342,22 @@ class map{
    // a move. Worth 2KB to make the one upgrade that cannot be undone undoable.
    hidden function migrateOldMap()
    {
-      var old = Storage.getValue("bigMap");
+      // Reading the object store can THROW, not just return null, if the store
+      // is inconsistent - a device whose .IDX index is missing or does not
+      // match its .DAT raises a System Error here and the field crash-loops on
+      // every launch with nothing on screen to explain it. An unreadable old
+      // map is not worth taking the app down for: note it and carry on with an
+      // empty one, which the rider can re-seed.
+      var old = null;
+      try
+      {
+         old = Storage.getValue("bigMap");
+      }
+      catch (ex)
+      {
+         dbgOld = -2;        // store unreadable
+         return false;
+      }
       if (old == null) { dbgOld = -1; return false; }
       if (old.size() != 496) { dbgOld = old.size(); return false; }
       dbgOld = 496;
