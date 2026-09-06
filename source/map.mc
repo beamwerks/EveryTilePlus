@@ -342,12 +342,16 @@ class map{
    // a move. Worth 2KB to make the one upgrade that cannot be undone undoable.
    hidden function migrateOldMap()
    {
-      // Reading the object store can THROW, not just return null, if the store
-      // is inconsistent - a device whose .IDX index is missing or does not
-      // match its .DAT raises a System Error here and the field crash-loops on
-      // every launch with nothing on screen to explain it. An unreadable old
-      // map is not worth taking the app down for: note it and carry on with an
-      // empty one, which the rider can re-seed.
+      // Reading the object store can throw rather than return null, so an
+      // unreadable old map is not worth taking the app down for: note it and
+      // carry on with an empty one, which the rider can re-seed.
+      //
+      // NOTE this does not save a genuinely corrupt store. A store whose .IDX
+      // does not match its .DAT raises a System Error, and Monkey C catch only
+      // takes Lang.Exception - the fault comes straight back out of this try
+      // and the field still dies. Verified on hardware: the crash was logged
+      // at the getValue line INSIDE this block. Only a store the device built
+      // itself can be relied on here.
       var old = null;
       try
       {
