@@ -31,6 +31,7 @@ edge840.resourcePath      = $(base.resourcePath);$(medRez)
 edgeexplore2.resourcePath = $(base.resourcePath);$(medRez)
 edgemtb.resourcePath      = $(base.resourcePath);$(medRez)
 edge1050.resourcePath     = $(base.resourcePath);$(highRez)
+edge1060.resourcePath     = $(base.resourcePath);$(highRez)
 edge550.resourcePath      = $(base.resourcePath);$(highRez)
 edge850.resourcePath      = $(base.resourcePath);$(highRez)
 
@@ -39,6 +40,7 @@ edge540.excludeAnnotations      = ed520;ed1000;ed1030;ed1050;ed550;edmtb;header
 edge840.excludeAnnotations      = ed520;ed1000;ed1030;ed1050;ed550;edmtb;header
 edgeexplore2.excludeAnnotations = ed520;ed530;ed1030;ed1050;ed550;edmtb;header
 edge1050.excludeAnnotations     = ed520;ed530;ed1000;ed1030;ed550;edmtb;header
+edge1060.excludeAnnotations     = ed520;ed530;ed1000;ed1030;ed550;edmtb;header
 edge550.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;edmtb;header
 edge850.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;edmtb;header
 edgemtb.excludeAnnotations      = ed520;ed530;ed1000;ed1030;ed1050;ed550;header
